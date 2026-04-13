@@ -34,21 +34,44 @@ async def cadastrar_cliente_action(
     request: Request, db: AsyncSession = Depends(get_db)
 ):
     form_data = await request.form()
+    cliente_id = form_data.get("cliente_id")
+    
     try:
-        await admin_service.criar_cliente(
-            db,
-            form_data["nome"],
-            form_data["telefone"],
-            datetime.strptime(form_data["data_nascimento"], "%Y-%m-%d").date(),
-        )
-        return RedirectResponse(
-            url="/cadastrar-cliente?msg=sucesso", status_code=status.HTTP_303_SEE_OTHER
-        )
+        if cliente_id:
+            # Edição de cliente existente
+            await admin_service.atualizar_cliente(
+                db,
+                int(cliente_id),
+                form_data["nome"],
+                form_data["telefone"],
+                datetime.strptime(form_data["data_nascimento"], "%Y-%m-%d").date(),
+            )
+            return RedirectResponse(
+                url="/cadastrar-cliente?msg=Cliente+atualizado+com+sucesso", 
+                status_code=status.HTTP_303_SEE_OTHER
+            )
+        else:
+            # Cadastro de novo cliente
+            await admin_service.criar_cliente(
+                db,
+                form_data["nome"],
+                form_data["telefone"],
+                datetime.strptime(form_data["data_nascimento"], "%Y-%m-%d").date(),
+            )
+            return RedirectResponse(
+                url="/cadastrar-cliente?msg=sucesso", status_code=status.HTTP_303_SEE_OTHER
+            )
     except Exception as e:
-        return RedirectResponse(
-            url=f"/cadastrar-cliente?erro={str(e)}",
-            status_code=status.HTTP_303_SEE_OTHER,
-        )
+        if cliente_id:
+            return RedirectResponse(
+                url=f"/cadastrar-cliente?erro={str(e)}",
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
+        else:
+            return RedirectResponse(
+                url=f"/cadastrar-cliente?erro={str(e)}",
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
 
 
 @router.get("/lista-clientes", response_class=HTMLResponse)
