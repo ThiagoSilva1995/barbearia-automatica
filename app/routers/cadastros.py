@@ -16,12 +16,14 @@ templates = Jinja2Templates(directory="app/templates")
 # --- CLIENTES ---
 @router.get("/cadastrar-cliente", response_class=HTMLResponse)
 async def cadastrar_cliente_form(request: Request, db: AsyncSession = Depends(get_db)):
+    """Tela unificada de cadastro e lista de clientes (similar a barbeiros)"""
     result = await db.execute(select(Cliente).order_by(Cliente.id.desc()).limit(10))
     return templates.TemplateResponse(
         "clientes/cadastrar_cliente.html",
         {
             "request": request,
             "erro": request.query_params.get("erro"),
+            "msg": request.query_params.get("msg"),
             "clientes_recentes": result.scalars().all(),
         },
     )
