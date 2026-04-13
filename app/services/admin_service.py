@@ -22,48 +22,6 @@ async def get_clientes(db: AsyncSession, search: str = None, limit: int = 100):
     return result.scalars().all()
 
 
-async def get_cliente_com_visitas(db: AsyncSession, cliente_id: int):
-    """Retorna um cliente com a contagem de visitas na última semana"""
-    stmt = select(Cliente).where(Cliente.id == cliente_id)
-    result = await db.execute(stmt)
-    cliente = result.scalars().first()
-    return cliente
-
-
-async def contar_visitas_ultima_semana(db: AsyncSession, cliente_id: int) -> int:
-    """Conta quantas vezes o cliente teve agendamentos na última semana"""
-    hoje = date.today()
-    sete_dias_atras = hoje - timedelta(days=7)
-    
-    stmt = (
-        select(func.count(Agendamento.id))
-        .where(
-            Agendamento.cliente_id == cliente_id,
-            Agendamento.data >= sete_dias_atras,
-            Agendamento.data <= hoje,
-        )
-    )
-    result = await db.execute(stmt)
-    return result.scalar() or 0
-
-
-async def get_clientes_com_visitas(db: AsyncSession):
-    """Retorna todos os clientes com a contagem de visitas na última semana"""
-    stmt = select(Cliente).order_by(Cliente.nome)
-    result = await db.execute(stmt)
-    clientes = result.scalars().all()
-    
-    clientes_com_visitas = []
-    for cliente in clientes:
-        visitas = await contar_visitas_ultima_semana(db, cliente.id)
-        clientes_com_visitas.append({
-            "cliente": cliente,
-            "visitas_ultima_semana": visitas
-        })
-    
-    return clientes_com_visitas
-
-
 async def criar_cliente(
     db: AsyncSession, nome: str, telefone: str, data_nascimento: date
 ):
