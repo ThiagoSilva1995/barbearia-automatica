@@ -91,7 +91,7 @@
                     class="px-4 py-2 rounded-full text-sm font-medium hover:bg-white hover:text-blue-600 hover:shadow-sm transition text-slate-600">Agenda</a>
                 <a href="/marcar-horario"
                     class="px-4 py-2 rounded-full text-sm font-medium hover:bg-white hover:text-blue-600 hover:shadow-sm transition text-slate-600">Novo</a>
-                <a href="/lista-clientes"
+                <a href="/cadastrar-cliente"
                     class="px-4 py-2 rounded-full text-sm font-medium hover:bg-white hover:text-blue-600 hover:shadow-sm transition text-slate-600 {% if request.url.path == '/lista-clientes' %}bg-white text-blue-600 shadow-sm{% endif %}">Clientes</a>
 
                 {% if request.session.get('user_role') == 'admin' %}
