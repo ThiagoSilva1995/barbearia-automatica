@@ -11,6 +11,7 @@ from app.services import admin_service
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
+templates.env.globals["now"] = datetime.now
 
 
 # --- CLIENTES ---
@@ -366,3 +367,54 @@ async def remover_barbeiro(
         url="/cadastrar-barbeiro?erro=Não+encontrado",
         status_code=status.HTTP_303_SEE_OTHER,
     )
+
+@router.get("/lista-completa-clientes", response_class=HTMLResponse)
+async def listar_clientes_completo(request: Request, db: AsyncSession = Depends(get_db)):
+    """Tela de lista completa com estatísticas de visitas"""
+    from sqlalchemy import select, and_
+    from app.models import Agendamento
+    
+    clientes_result = await db.execute(select(Cliente).order_by(Cliente.nome))
+    clientes = clientes_result.scalars().all()
+    
+    hoje = datetime.now().date()
+    sete_dias_atras = hoje - timedelta(days=7)
+    
+    dados_clientes = []
+    for cliente in clientes:
+        # Visitas na última semana
+        stmt_semana = select(Agendamento).where(
+            and_(
+                Agendamento.cliente_id == cliente.id,
+                Agendamento.data >= sete_dias_atras,
+                Agendamento.status != 'cancelado'
+            )
+        )
+        result_semana = await db.execute(stmt_semana)
+        visitas_semana = len(result_semana.scalars().all())
+        
+        # Total de visitas
+        stmt_total = select(Agendamento).where(
+            and_(
+                Agendamento.cliente_id == cliente.id,
+                Agendamento.status != 'cancelado'
+            )
+        )
+        result_total = await db.execute(stmt_total)
+        total_visitas = len(result_total.scalars().all())
+        
+        idade = 0
+        if cliente.data_nascimento:
+            idade = (hoje - cliente.data_nascimento).days // 365
+            
+        dados_clientes.append({
+            "cliente": cliente,
+            "visitas_semana": visitas_semana,
+            "total_visitas": total_visitas,
+            "idade": idade
+        })
+
+    return templates.TemplateResponse("clientes/lista_completa_clientes.html", {
+        "request": request,
+        "dados_clientes": dados_clientes
+    })

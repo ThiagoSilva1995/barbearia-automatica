@@ -78,7 +78,7 @@
                         <td class="px-6 py-4 whitespace-nowrap">
                             <div class="text-sm text-gray-900">{{ cliente.data_nascimento.strftime('%d/%m/%Y') }}</div>
                             <div class="text-xs text-gray-500">
-                                {% set idade = (now() - cliente.data_nascimento).days // 365 %}
+                                {% set idade = (now().date() - cliente.data_nascimento).days // 365 %}
                                 {{ idade }} anos
                             </div>
                         </td>
