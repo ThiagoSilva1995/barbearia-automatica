@@ -5,42 +5,62 @@ from app.models.cliente import Cliente
 # ==========================================================
 # CONFIGURAÇÕES DA EVOLUTION API (LOCAL)
 # ==========================================================
-EVOLUTION_API_URL = "http://localhost:8080"
-INSTANCE_NAME = "barbearia"  # O nome que você criou no painel
-API_KEY = "sua_chave_secreta_123"  # A mesma chave do docker-compose
+
+
+import os
+API_KEY = os.getenv("EVOLUTION_API_KEY", "sua_chave_secreta_123")
+EVOLUTION_API_URL = "http://evolution_api:8080"
+INSTANCE_NAME = "Barbearia_Online"
 
 
 async def enviar_mensagem_automatica(telefone: str, mensagem: str) -> bool:
-    """Envia mensagem via Evolution API."""
+    """Envia mensagem via Evolution API v1.8.0."""
+    # Limpa e formata o telefone
     tel_limpo = "".join(filter(str.isdigit, telefone))
     if not tel_limpo.startswith("55"):
         tel_limpo = "55" + tel_limpo.lstrip("0")
 
+    # Payload no formato CORRETO para Evolution API v1.8.0
     payload = {
-        "number": tel_limpo,
-        "textMessage": {"text": mensagem},
-        "presence": "composing",
+    "number": tel_limpo,
+    "textMessage": {"text": mensagem},  # ✅ CORRETO!
+    "presence": "composing",
+}
+
+    headers = {
+        "apikey": API_KEY,
+        "Content-Type": "application/json"
     }
 
-    headers = {"apikey": API_KEY, "Content-Type": "application/json"}
-
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        # Aumenta timeout para 30 segundos (API pode ser lenta)
+        async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
                 f"{EVOLUTION_API_URL}/message/sendText/{INSTANCE_NAME}",
                 json=payload,
                 headers=headers,
             )
-            if response.status_code in [200, 201]:
+            
+            # Log detalhado para debug
+            print(f"📤 Enviando para {tel_limpo}: Status {response.status_code}")
+            print(f"📦 Resposta: {response.text[:200]}")
+            
+            if response.status_code in [200, 201, 202]:
                 print(f"✅ [AUTO] Mensagem enviada para {telefone}")
                 return True
             else:
                 print(f"❌ [ERRO API] {response.status_code}: {response.text}")
                 return False
-    except Exception as e:
-        print(f"❌ [ERRO CONEXÃO] {e}")
+                
+    except httpx.ConnectError as e:
+        print(f"❌ [ERRO CONEXÃO] Não foi possível conectar à Evolution API: {e}")
         return False
-
+    except httpx.TimeoutException as e:
+        print(f"❌ [ERRO TIMEOUT] A API demorou demais para responder: {e}")
+        return False
+    except Exception as e:
+        print(f"❌ [ERRO DESCONHECIDO] {type(e).__name__}: {e}")
+        return False
 
 def gerar_link_whatsapp(telefone: str, mensagem: str) -> str:
     """Gera link manual."""
