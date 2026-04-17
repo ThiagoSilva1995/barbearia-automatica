@@ -36,7 +36,7 @@ services:
     environment:
       - SERVER_URL=http://104.197.162.83:8080
       - DATABASE_PROVIDER=sqlite
-      - AUTHENTICATION_API_KEY=sua_chave_secreta_123
+      - AUTHENTICATION_API_KEY=iOS8d66fEr6Ou2M8nhJZRz6SKAmOGQkF
       - DISABLE_MANAGER=false
     volumes:
       - evolution_data:/store

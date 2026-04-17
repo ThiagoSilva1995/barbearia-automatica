@@ -4,6 +4,7 @@ from sqlalchemy.orm import selectinload
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import List, Optional, Dict
+from app.utils.phone_utils import format_phone_for_storage
 import re
 
 from app.models import Cliente, Barbeiro, Servico, Produto, Agendamento
@@ -34,14 +35,11 @@ async def contar_visitas_ultima_semana(db: AsyncSession, cliente_id: int) -> int
     """Conta quantas vezes o cliente teve agendamentos na última semana"""
     hoje = date.today()
     sete_dias_atras = hoje - timedelta(days=7)
-    
-    stmt = (
-        select(func.count(Agendamento.id))
-        .where(
-            Agendamento.cliente_id == cliente_id,
-            Agendamento.data >= sete_dias_atras,
-            Agendamento.data <= hoje,
-        )
+
+    stmt = select(func.count(Agendamento.id)).where(
+        Agendamento.cliente_id == cliente_id,
+        Agendamento.data >= sete_dias_atras,
+        Agendamento.data <= hoje,
     )
     result = await db.execute(stmt)
     return result.scalar() or 0
@@ -52,52 +50,53 @@ async def get_clientes_com_visitas(db: AsyncSession):
     stmt = select(Cliente).order_by(Cliente.nome)
     result = await db.execute(stmt)
     clientes = result.scalars().all()
-    
+
     clientes_com_visitas = []
     for cliente in clientes:
         visitas = await contar_visitas_ultima_semana(db, cliente.id)
-        clientes_com_visitas.append({
-            "cliente": cliente,
-            "visitas_ultima_semana": visitas
-        })
-    
+        clientes_com_visitas.append(
+            {"cliente": cliente, "visitas_ultima_semana": visitas}
+        )
+
     return clientes_com_visitas
 
 
 async def criar_cliente(
     db: AsyncSession, nome: str, telefone: str, data_nascimento: date
 ):
-    nome_formatado = nome.title()
-    tel_limpo = re.sub(r"\D", "", telefone)
-    if not tel_limpo.startswith("55"):
-        tel_limpo = "55" + (tel_limpo[1:] if tel_limpo.startswith("0") else tel_limpo)
+    telefone_padronizado = format_phone_for_storage(telefone)
 
-    cliente = Cliente(
-        nome=nome_formatado,
-        telefone=tel_limpo,
+    # Verifica duplicidade
+    stmt_check = select(Cliente).where(
+        Cliente.telefone.like(f"%{telefone_padronizado[-9:]}")
+    )
+    if (await db.execute(stmt_check)).scalars().first():
+        raise ValueError("Telefone já cadastrado!")
+
+    novo_cliente = Cliente(
+        nome=nome.title(),
+        telefone=telefone_padronizado,
         data_nascimento=data_nascimento,
         parabens_enviado=False,
     )
-    db.add(cliente)
+    db.add(novo_cliente)
     await db.commit()
-    await db.refresh(cliente)
-    return cliente
+    await db.refresh(novo_cliente)
+    return novo_cliente
 
 
 async def atualizar_cliente(
     db: AsyncSession, cliente_id: int, nome: str, telefone: str, data_nascimento: date
 ):
     stmt = select(Cliente).where(Cliente.id == cliente_id)
-    result = await db.execute(stmt)
-    cliente = result.scalars().first()
+    res = await db.execute(stmt)
+    cliente = res.scalars().first()
+
     if not cliente:
         raise ValueError("Cliente não encontrado")
 
     cliente.nome = nome.title()
-    tel_limpo = re.sub(r"\D", "", telefone)
-    if not tel_limpo.startswith("55"):
-        tel_limpo = "55" + (tel_limpo[1:] if tel_limpo.startswith("0") else tel_limpo)
-    cliente.telefone = tel_limpo
+    cliente.telefone = format_phone_for_storage(telefone)  # ← Atualiza padronizado
     cliente.data_nascimento = data_nascimento
 
     await db.commit()

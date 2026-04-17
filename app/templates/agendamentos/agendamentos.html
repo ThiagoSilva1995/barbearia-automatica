@@ -55,7 +55,7 @@
                 </div>
                 <div class="truncate">
                     <p class="font-bold text-gray-800 truncate">{{ item.cliente.nome }}</p>
-                    <p class="text-xs text-gray-500">{{ item.cliente.telefone }}</p>
+                    <p class="text-xs text-gray-500">{{ item.cliente.telefone_formatado }}</p>
                 </div>
             </div>
             <div class="flex items-center gap-2 flex-shrink-0 ml-2">
@@ -105,7 +105,8 @@
                             }}</span>
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">
-                        {{ agd.cliente.nome }} <div class="text-xs text-gray-500">{{ agd.cliente.telefone }}</div>
+                        {{ agd.cliente.nome }} <div class="text-xs text-gray-500">{{ agd.cliente.telefone_formatado }}
+                        </div>
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{{ agd.barbeiro.nome }}</td>
                     <td class="px-6 py-4 text-sm text-gray-600">

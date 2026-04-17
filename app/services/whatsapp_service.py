@@ -8,9 +8,10 @@ from app.models.cliente import Cliente
 
 
 import os
+
 API_KEY = os.getenv("EVOLUTION_API_KEY", "sua_chave_secreta_123")
 EVOLUTION_API_URL = "http://evolution_api:8080"
-INSTANCE_NAME = "Barbearia_Online"
+INSTANCE_NAME = os.getenv("INSTANCE_NAME", "Barbearia_Dev")
 
 
 async def enviar_mensagem_automatica(telefone: str, mensagem: str) -> bool:
@@ -22,15 +23,12 @@ async def enviar_mensagem_automatica(telefone: str, mensagem: str) -> bool:
 
     # Payload no formato CORRETO para Evolution API v1.8.0
     payload = {
-    "number": tel_limpo,
-    "textMessage": {"text": mensagem},  # ✅ CORRETO!
-    "presence": "composing",
-}
-
-    headers = {
-        "apikey": API_KEY,
-        "Content-Type": "application/json"
+        "number": tel_limpo,
+        "textMessage": {"text": mensagem},  # ✅ CORRETO!
+        "presence": "composing",
     }
+
+    headers = {"apikey": API_KEY, "Content-Type": "application/json"}
 
     try:
         # Aumenta timeout para 30 segundos (API pode ser lenta)
@@ -40,18 +38,18 @@ async def enviar_mensagem_automatica(telefone: str, mensagem: str) -> bool:
                 json=payload,
                 headers=headers,
             )
-            
+
             # Log detalhado para debug
             print(f"📤 Enviando para {tel_limpo}: Status {response.status_code}")
             print(f"📦 Resposta: {response.text[:200]}")
-            
+
             if response.status_code in [200, 201, 202]:
                 print(f"✅ [AUTO] Mensagem enviada para {telefone}")
                 return True
             else:
                 print(f"❌ [ERRO API] {response.status_code}: {response.text}")
                 return False
-                
+
     except httpx.ConnectError as e:
         print(f"❌ [ERRO CONEXÃO] Não foi possível conectar à Evolution API: {e}")
         return False
@@ -61,6 +59,7 @@ async def enviar_mensagem_automatica(telefone: str, mensagem: str) -> bool:
     except Exception as e:
         print(f"❌ [ERRO DESCONHECIDO] {type(e).__name__}: {e}")
         return False
+
 
 def gerar_link_whatsapp(telefone: str, mensagem: str) -> str:
     """Gera link manual."""

@@ -7,6 +7,7 @@ from sqlalchemy.orm import selectinload
 from datetime import datetime, timedelta, date
 import pytz
 from app.services.smart_schedule_service import disparar_efeito_dominio
+from app.utils.phone_utils import format_phone_for_storage, normalize_phone_for_search
 
 from app.database import get_db
 from app.models import Cliente, Barbeiro, Servico, Agendamento
@@ -40,13 +41,19 @@ async def area_cliente_acesso(request: Request):
 @router.post("/cliente/acessar")
 async def cliente_acessar_action(request: Request, db: AsyncSession = Depends(get_db)):
     form_data = await request.form()
-    telefone = "".join(filter(str.isdigit, form_data.get("telefone", "")))
-    if not telefone:
+    # ← MODIFICADO: Normaliza para busca flexível
+    telefone_raw = form_data.get("telefone", "")
+    telefone_busca = normalize_phone_for_search(
+        telefone_raw
+    )  # ← Extrai últimos 9-11 dígitos
+
+    if not telefone_busca:
         return RedirectResponse(
             url="/cliente?erro=Digite+o+telefone", status_code=status.HTTP_303_SEE_OTHER
         )
 
-    stmt = select(Cliente).where(Cliente.telefone.like(f"%{telefone[-9:]}"))
+    # Busca flexível: encontra mesmo se banco tem 55 e usuário digitou sem
+    stmt = select(Cliente).where(Cliente.telefone.like(f"%{telefone_busca}"))
     res = await db.execute(stmt)
     cliente = res.scalars().first()
 
@@ -57,8 +64,9 @@ async def cliente_acessar_action(request: Request, db: AsyncSession = Depends(ge
             url="/cliente/meus-agendamentos", status_code=status.HTTP_303_SEE_OTHER
         )
     else:
+        # ← MODIFICADO: Passa o telefone raw para pré-preencher o cadastro
         return RedirectResponse(
-            url=f"/cliente/cadastro?telefone={telefone}",
+            url=f"/cliente/cadastro?telefone={telefone_raw}",
             status_code=status.HTTP_303_SEE_OTHER,
         )
 
@@ -83,20 +91,27 @@ async def cliente_cadastrar_action(
     form_data = await request.form()
     try:
         nome = form_data.get("nome")
-        telefone = "".join(filter(str.isdigit, form_data.get("telefone", "")))
+        # ← MODIFICADO: Usa a função de padronização
+        telefone_raw = form_data.get("telefone", "")
+        telefone = format_phone_for_storage(telefone_raw)  # ← GARANTE 55+DDD+NÚMERO
+
         data_nasc_str = form_data.get("data_nascimento")
 
         if not nome or not telefone or not data_nasc_str:
             raise ValueError("Preencha todos os campos.")
 
         data_nasc = datetime.strptime(data_nasc_str, "%Y-%m-%d").date()
-        stmt_check = select(Cliente).where(Cliente.telefone.like(f"%{telefone[-9:]}"))
+
+        # ← MODIFICADO: Busca usa normalização para encontrar mesmo com formato diferente
+        stmt_check = select(Cliente).where(
+            Cliente.telefone.like(f"%{telefone[-9:]}")  # Busca pelos últimos 9 dígitos
+        )
         if (await db.execute(stmt_check)).scalars().first():
             raise ValueError("Telefone já cadastrado!")
 
         novo_cliente = Cliente(
             nome=nome.title(),
-            telefone=telefone,
+            telefone=telefone,  # ← Salva padronizado: 5573999999999
             data_nascimento=data_nasc,
             parabens_enviado=False,
         )
