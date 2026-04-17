@@ -30,3 +30,5 @@ htmlcov/
 *.so
 *.egg-info/
 ```
+.env
+backup/
