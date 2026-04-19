@@ -14,6 +14,17 @@ from app.routers import (
 from app.services.reminder_service import loop_de_verificacao  # Importe o loop
 import os
 import asyncio
+import logging
+
+# Configuração básica de logging
+logging.basicConfig(
+    level=logging.INFO,  # Produção: INFO; Desenvolvimento: DEBUG
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),  # Logs no console
+        # Opcional: logging.FileHandler("app.log"),  # Logs em arquivo
+    ],
+)
 
 
 async def lifespan(app: FastAPI):

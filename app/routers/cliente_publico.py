@@ -6,10 +6,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from datetime import datetime, timedelta, date
 import pytz
-import asyncio  # ← ÚNICO IMPORT (no topo)
+import asyncio
+import logging
 
-
+# ← IMPORTS DOS UTILITÁRIOS (no topo, como deve ser)
 from app.utils.phone_utils import format_phone_for_storage, normalize_phone_for_search
+
+from app.services.smart_schedule_service import disparar_efeito_dominio
 
 from app.database import get_db
 from app.models import Cliente, Barbeiro, Servico, Agendamento
@@ -21,15 +24,19 @@ from app.services.agendamento_service import (
     verificar_disponibilidade,
 )
 
+# ← IMPORTS DO WHATSAPP SERVICE (todos juntos)
 from app.services.whatsapp_service import (
     gerar_mensagem_aniversario,
     gerar_link_whatsapp,
     gerar_mensagem_novo_agendamento,
     gerar_mensagem_alteracao_agendamento,
     gerar_mensagem_cancelamento,
-    gerar_mensagem_confirmacao_cliente,  # ← NOVO
+    gerar_mensagem_confirmacao_cliente,
     enviar_mensagem_automatica,
 )
+
+# ← CONFIGURAÇÃO DO LOGGER (para produção)
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -321,7 +328,7 @@ async def cliente_agendar_confirmar(
             nome_barbeiro = barbeiro.nome if barbeiro else "Equipe"
             nome_cliente_curto = cliente.nome.split()[0]
 
-            # --- A) Mensagem PARA A BARBEARIA (IMEDIATA) ---
+            # --- A) Mensagem PARA A BARBEARIA (IMEDIATA - background) ---
             if telefone_barbearia:
                 msg_aviso_barbearia = gerar_mensagem_novo_agendamento(
                     cliente_nome=cliente.nome,
@@ -330,31 +337,32 @@ async def cliente_agendar_confirmar(
                     hora_str=hora_str,
                     barbeiro_nome=nome_barbeiro,
                 )
-                # Dispara em segundo plano
+                # Dispara em segundo plano (não bloqueia)
                 asyncio.create_task(
                     enviar_mensagem_automatica(telefone_barbearia, msg_aviso_barbearia)
                 )
 
-            # ⏱️ DELAY DE 3 SEGUNDOS (para parecer processamento)
-            await asyncio.sleep(20)
-
-            # --- B) Mensagem PARA O CLIENTE (COM DELAY) ---
+            # --- B) Mensagem PARA O CLIENTE (COM DELAY - EM BACKGROUND) ⬅️ NOVO!
+            # Cria uma task que aguarda 3s e depois envia (NÃO bloqueia a resposta HTTP)
             if cliente and cliente.telefone:
-                msg_confirmacao_cliente = gerar_mensagem_confirmacao_cliente(
-                    cliente_nome=nome_cliente_curto,
-                    data_str=data_formatada,
-                    hora_str=hora_str,
-                    barbeiro_nome=nome_barbeiro,
-                    servicos_nomes=nomes_servicos,
-                )
-                # Dispara em segundo plano
-                asyncio.create_task(
-                    enviar_mensagem_automatica(
+
+                async def enviar_com_delay():
+                    await asyncio.sleep(3)  # Delay natural
+                    msg_confirmacao_cliente = gerar_mensagem_confirmacao_cliente(
+                        cliente_nome=nome_cliente_curto,
+                        data_str=data_formatada,
+                        hora_str=hora_str,
+                        barbeiro_nome=nome_barbeiro,
+                        servicos_nomes=nomes_servicos,
+                    )
+                    await enviar_mensagem_automatica(
                         cliente.telefone, msg_confirmacao_cliente
                     )
-                )
 
-        # 5. Redirecionar para a lista de agendamentos com mensagem de sucesso
+                # Dispara a task em background
+                asyncio.create_task(enviar_com_delay())
+
+        # 5. Redirecionar PARA O CLIENTE IMEDIATAMENTE (sem esperar o delay!)
         return RedirectResponse(
             url="/cliente/meus-agendamentos?msg=Agendamento+realizado!+Confirmação+enviada+no+WhatsApp.",
             status_code=status.HTTP_303_SEE_OTHER,
@@ -553,24 +561,16 @@ async def cliente_cancelar_agendamento(
     if not cliente_id:
         return RedirectResponse(url="/cliente", status_code=status.HTTP_303_SEE_OTHER)
 
-    # 🔍 PASSO 0: OBTER TELEFONE DO CLIENTE AGORA (antes de qualquer delete!)
-    # Query direta só para pegar o telefone - isolada e segura
+    # 1. Obter telefone do cliente ANTES de qualquer operação que faça commit
     stmt_phone = select(Cliente.telefone).where(Cliente.id == cliente_id)
     telefone_raw = (await db.execute(stmt_phone)).scalar()
 
-    # Padronizar telefone IMEDIATAMENTE
+    # Padronizar telefone imediatamente
     telefone_cliente = None
     if telefone_raw:
-        from app.utils.phone_utils import format_phone_for_storage
-
         telefone_cliente = format_phone_for_storage(str(telefone_raw))
 
-    # DEBUG SUPER EXPLÍCITO (vai aparecer nos logs se o código estiver rodando)
-    print(f"🔥 [CANCEL DEBUG] INÍCIO - cliente_id={cliente_id}")
-    print(f"🔥 [CANCEL DEBUG] telefone_raw={telefone_raw}")
-    print(f"🔥 [CANCEL DEBUG] telefone_cliente={telefone_cliente}")
-
-    # 1. Buscar dados do agendamento
+    # 2. Buscar dados do agendamento
     stmt = (
         select(Agendamento)
         .options(selectinload(Agendamento.barbeiro), selectinload(Agendamento.servicos))
@@ -580,14 +580,12 @@ async def cliente_cancelar_agendamento(
     agd = res.scalars().first()
 
     if not agd:
-        print(f"⚠️ [CANCEL DEBUG] Agendamento não encontrado")
         return RedirectResponse(
             url="/cliente/meus-agendamentos?erro=Agendamento+não+encontrado",
             status_code=status.HTTP_303_SEE_OTHER,
         )
 
     if agd.pago:
-        print(f"⚠️ [CANCEL DEBUG] Agendamento já pago")
         return RedirectResponse(
             url="/cliente/meus-agendamentos?erro=Não+é+possível+cancelar+após+pago",
             status_code=status.HTTP_303_SEE_OTHER,
@@ -606,19 +604,17 @@ async def cliente_cancelar_agendamento(
         config.telefone_barbearia if config and config.telefone_barbearia else ""
     )
 
-    # Buscar nome do cliente para as mensagens (query isolada também)
+    # Buscar nome do cliente para as mensagens
     stmt_nome = select(Cliente.nome).where(Cliente.id == cliente_id)
     nome_cliente = (await db.execute(stmt_nome)).scalar() or "Cliente"
     nome_curto = nome_cliente.split()[0]
 
-    # 2. Realizar o Cancelamento no Banco (AQUI ACONTECE O DELETE)
-    print(f"🔥 [CANCEL DEBUG] Chamando remover_agendamento...")
+    # 3. Realizar o Cancelamento no Banco
     await remover_agendamento(db, agendamento_id)
-    print(f"✅ [CANCEL DEBUG] remover_agendamento concluído")
 
-    # 3. Enviar Avisos Automáticos
+    # 4. Enviar Avisos Automáticos EM BACKGROUND (NÃO bloqueia a resposta HTTP)
 
-    # --- A) Mensagem PARA A BARBEARIA ---
+    # --- A) Mensagem PARA A BARBEARIA (background imediato) ---
     if telefone_barbearia:
         msg_aviso_barbearia = gerar_mensagem_cancelamento(
             cliente_nome=nome_cliente,
@@ -631,44 +627,26 @@ async def cliente_cancelar_agendamento(
             enviar_mensagem_automatica(telefone_barbearia, msg_aviso_barbearia)
         )
 
-    # ⏱️ DELAY DE 3 SEGUNDOS
-    print(f"⏱️ [CANCEL DEBUG] Aguardando 3 segundos...")
-    await asyncio.sleep(3)
-
-    # --- B) Mensagem PARA O CLIENTE (USANDO TELEFONE SALVO ANTES) ---
-    print(
-        f"🔥 [CANCEL DEBUG] Tentando enviar para cliente: telefone={telefone_cliente}"
-    )
-
+    # --- B) Mensagem PARA O CLIENTE (COM DELAY - EM BACKGROUND) ⬅️ OTIMIZADO!
+    # Cria uma task que aguarda 3s e depois envia (NÃO bloqueia a resposta HTTP)
     if telefone_cliente and str(telefone_cliente).strip():
-        msg_confirmacao_cliente = (
-            f"❌ *CANCELAMENTO CONFIRMADO* ❌\n\n"
-            f"Olá, *{nome_curto}*! Seu agendamento foi cancelado com sucesso.\n\n"
-            f"📅 *Data:* {data_fmt}\n"
-            f"⏰ *Horário:* {hora_fmt}\n"
-            f"✂️ *Serviços:* {', '.join(nomes_servicos)}\n\n"
-            f"Sentiremos sua falta! Quando quiser voltar, estamos à disposição. 💈"
-        )
 
-        try:
-            print(
-                f"📤 [CANCEL DEBUG] Chamando enviar_mensagem_automatica para {telefone_cliente}"
+        async def enviar_confirmacao_com_delay():
+            await asyncio.sleep(3)  # Delay natural para parecer processamento
+            msg_confirmacao_cliente = (
+                f"❌ *CANCELAMENTO CONFIRMADO* ❌\n\n"
+                f"Olá, *{nome_curto}*! Seu agendamento foi cancelado com sucesso.\n\n"
+                f"📅 *Data:* {data_fmt}\n"
+                f"⏰ *Horário:* {hora_fmt}\n"
+                f"✂️ *Serviços:* {', '.join(nomes_servicos)}\n\n"
+                f"Sentiremos sua falta! Quando quiser voltar, estamos à disposição. 💈"
             )
-            resultado = await enviar_mensagem_automatica(
-                telefone_cliente, msg_confirmacao_cliente
-            )
-            print(f"✅ [CANCEL DEBUG] Resultado: {resultado}")
-        except Exception as e:
-            print(f"❌ [CANCEL DEBUG] Erro: {type(e).__name__}: {e}")
-            import traceback
+            await enviar_mensagem_automatica(telefone_cliente, msg_confirmacao_cliente)
 
-            traceback.print_exc()
-    else:
-        print(
-            f"❌ [CANCEL DEBUG] NÃO enviou: telefone_cliente inválido='{telefone_cliente}'"
-        )
+        # Dispara a task em background (NÃO usa await aqui!)
+        asyncio.create_task(enviar_confirmacao_com_delay())
 
-    print(f"🔥 [CANCEL DEBUG] FIM - Redirecionando")
+    # 5. Redirecionar PARA O CLIENTE IMEDIATAMENTE (sem esperar o delay!)
     return RedirectResponse(
         url="/cliente/meus-agendamentos?msg=Agendamento+cancelado!+Aviso+enviado+automaticamente.",
         status_code=status.HTTP_303_SEE_OTHER,
