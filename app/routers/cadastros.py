@@ -36,7 +36,7 @@ async def cadastrar_cliente_action(
 ):
     form_data = await request.form()
     cliente_id = form_data.get("cliente_id")
-    
+
     try:
         if cliente_id:
             # Edição de cliente existente
@@ -48,8 +48,8 @@ async def cadastrar_cliente_action(
                 datetime.strptime(form_data["data_nascimento"], "%Y-%m-%d").date(),
             )
             return RedirectResponse(
-                url="/cadastrar-cliente?msg=Cliente+atualizado+com+sucesso", 
-                status_code=status.HTTP_303_SEE_OTHER
+                url="/cadastrar-cliente?msg=Cliente+atualizado+com+sucesso",
+                status_code=status.HTTP_303_SEE_OTHER,
             )
         else:
             # Cadastro de novo cliente
@@ -60,7 +60,8 @@ async def cadastrar_cliente_action(
                 datetime.strptime(form_data["data_nascimento"], "%Y-%m-%d").date(),
             )
             return RedirectResponse(
-                url="/cadastrar-cliente?msg=sucesso", status_code=status.HTTP_303_SEE_OTHER
+                url="/cadastrar-cliente?msg=sucesso",
+                status_code=status.HTTP_303_SEE_OTHER,
             )
     except Exception as e:
         if cliente_id:
@@ -98,13 +99,13 @@ async def editar_cliente_form(
     stmt = select(Cliente).where(Cliente.id == cliente_id)
     result = await db.execute(stmt)
     cliente = result.scalars().first()
-    
+
     if not cliente:
         return RedirectResponse(
             url="/lista-clientes?erro=Cliente+não+encontrado",
             status_code=status.HTTP_303_SEE_OTHER,
         )
-    
+
     return templates.TemplateResponse(
         "clientes/editar_cliente.html",
         {
@@ -130,7 +131,7 @@ async def editar_cliente_action(
             datetime.strptime(form_data["data_nascimento"], "%Y-%m-%d").date(),
         )
         return RedirectResponse(
-            url="/lista-clientes?msg=Cliente+atualizado+com+sucesso",
+            url="/cadastrar-cliente?msg=Cliente+atualizado+com+sucesso",
             status_code=status.HTTP_303_SEE_OTHER,
         )
     except Exception as e:
@@ -147,18 +148,19 @@ async def excluir_cliente(
     """Excluir um cliente"""
     try:
         await admin_service.excluir_cliente(db, cliente_id)
+        # ✅ Mude para cadastrar-cliente:
         return RedirectResponse(
-            url="/lista-clientes?msg=Cliente+excluido+com+sucesso",
+            url="/cadastrar-cliente?msg=Cliente+excluido+com+sucesso",
             status_code=status.HTTP_303_SEE_OTHER,
         )
     except Exception as e:
         if "foreign key" in str(e).lower():
             return RedirectResponse(
-                url="/lista-clientes?erro=Cliente+possui+agendamentos+vinculados",
+                url="/cadastrar-cliente?erro=Cliente+possui+agendamentos+vinculados",
                 status_code=status.HTTP_303_SEE_OTHER,
             )
         return RedirectResponse(
-            url=f"/lista-clientes?erro={str(e)}",
+            url=f"/cadastrar-cliente?erro={str(e)}",
             status_code=status.HTTP_303_SEE_OTHER,
         )
 
@@ -368,18 +370,21 @@ async def remover_barbeiro(
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
+
 @router.get("/lista-completa-clientes", response_class=HTMLResponse)
-async def listar_clientes_completo(request: Request, db: AsyncSession = Depends(get_db)):
+async def listar_clientes_completo(
+    request: Request, db: AsyncSession = Depends(get_db)
+):
     """Tela de lista completa com estatísticas de visitas"""
     from sqlalchemy import select, and_
     from app.models import Agendamento
-    
+
     clientes_result = await db.execute(select(Cliente).order_by(Cliente.nome))
     clientes = clientes_result.scalars().all()
-    
+
     hoje = datetime.now().date()
     sete_dias_atras = hoje - timedelta(days=7)
-    
+
     dados_clientes = []
     for cliente in clientes:
         # Visitas na última semana
@@ -387,34 +392,35 @@ async def listar_clientes_completo(request: Request, db: AsyncSession = Depends(
             and_(
                 Agendamento.cliente_id == cliente.id,
                 Agendamento.data >= sete_dias_atras,
-                Agendamento.status != 'cancelado'
+                Agendamento.status != "cancelado",
             )
         )
         result_semana = await db.execute(stmt_semana)
         visitas_semana = len(result_semana.scalars().all())
-        
+
         # Total de visitas
         stmt_total = select(Agendamento).where(
             and_(
-                Agendamento.cliente_id == cliente.id,
-                Agendamento.status != 'cancelado'
+                Agendamento.cliente_id == cliente.id, Agendamento.status != "cancelado"
             )
         )
         result_total = await db.execute(stmt_total)
         total_visitas = len(result_total.scalars().all())
-        
+
         idade = 0
         if cliente.data_nascimento:
             idade = (hoje - cliente.data_nascimento).days // 365
-            
-        dados_clientes.append({
-            "cliente": cliente,
-            "visitas_semana": visitas_semana,
-            "total_visitas": total_visitas,
-            "idade": idade
-        })
 
-    return templates.TemplateResponse("clientes/lista_completa_clientes.html", {
-        "request": request,
-        "dados_clientes": dados_clientes
-    })
+        dados_clientes.append(
+            {
+                "cliente": cliente,
+                "visitas_semana": visitas_semana,
+                "total_visitas": total_visitas,
+                "idade": idade,
+            }
+        )
+
+    return templates.TemplateResponse(
+        "clientes/lista_completa_clientes.html",
+        {"request": request, "dados_clientes": dados_clientes},
+    )
