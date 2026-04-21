@@ -17,6 +17,10 @@
     {% endif %}
 
     <form action="/cliente/acessar" method="POST" class="w-full space-y-4">
+        {% if request.query_params.get('redirect') %}
+        <input type="hidden" name="redirect" value="{{ request.query_params.get('redirect') }}">
+        {% endif %}
+
         <div class="text-left space-y-2">
             <label class="text-sm font-bold text-slate-700 ml-1">Seu WhatsApp</label>
             <div class="relative">

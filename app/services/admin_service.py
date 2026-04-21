@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import List, Optional, Dict
 from app.utils.phone_utils import format_phone_for_storage
 import re
+from app.utils.formatters import format_name
 
 from app.models import Cliente, Barbeiro, Servico, Produto, Agendamento
 
@@ -64,6 +65,9 @@ async def get_clientes_com_visitas(db: AsyncSession):
 async def criar_cliente(
     db: AsyncSession, nome: str, telefone: str, data_nascimento: date
 ):
+    # ✅ Formatar nome com função utilitária (mais robusto que .title())
+    nome_formatado = format_name(nome)
+
     telefone_padronizado = format_phone_for_storage(telefone)
 
     # Verifica duplicidade
@@ -74,7 +78,7 @@ async def criar_cliente(
         raise ValueError("Telefone já cadastrado!")
 
     novo_cliente = Cliente(
-        nome=nome.title(),
+        nome=nome_formatado,  # ← Usa nome formatado pela função utilitária
         telefone=telefone_padronizado,
         data_nascimento=data_nascimento,
         parabens_enviado=False,
@@ -86,8 +90,17 @@ async def criar_cliente(
 
 
 async def atualizar_cliente(
-    db: AsyncSession, cliente_id: int, nome: str, telefone: str, data_nascimento: date
+    db: AsyncSession,
+    cliente_id: int,
+    nome: str,
+    telefone: str,
+    data_nascimento: date,
 ):
+    # ✅ Formatar nome com função utilitária
+    nome_formatado = format_name(nome)
+
+    telefone_padronizado = format_phone_for_storage(telefone)
+
     stmt = select(Cliente).where(Cliente.id == cliente_id)
     res = await db.execute(stmt)
     cliente = res.scalars().first()
@@ -95,12 +108,14 @@ async def atualizar_cliente(
     if not cliente:
         raise ValueError("Cliente não encontrado")
 
-    cliente.nome = nome.title()
-    cliente.telefone = format_phone_for_storage(telefone)  # ← Atualiza padronizado
+    # Atualizar com valores formatados
+    cliente.nome = nome_formatado  # ← Usa nome formatado
+    cliente.telefone = telefone_padronizado
     cliente.data_nascimento = data_nascimento
 
     await db.commit()
     await db.refresh(cliente)
+
     return cliente
 
 
@@ -125,26 +140,55 @@ async def get_barbeiros(db: AsyncSession):
     return result.scalars().all()
 
 
-async def criar_barbeiro(db: AsyncSession, nome: str, telefone: str):
-    barbeiro = Barbeiro(nome=nome.title(), telefone=telefone)
-    db.add(barbeiro)
+async def criar_barbeiro(
+    db: AsyncSession,
+    nome: str,
+    telefone: str,
+) -> Barbeiro:
+    nome_formatado = format_name(nome)
+    from app.utils.phone_utils import format_phone_for_storage
+
+    telefone_formatado = format_phone_for_storage(telefone)
+
+    stmt_check = select(Barbeiro).where(Barbeiro.nome.ilike(nome_formatado))
+    if (await db.execute(stmt_check)).scalars().first():
+        raise ValueError("Barbeiro já cadastrado!")
+
+    novo_barbeiro = Barbeiro(
+        nome=nome_formatado,
+        telefone=telefone_formatado,
+    )
+
+    db.add(novo_barbeiro)
     await db.commit()
-    await db.refresh(barbeiro)
-    return barbeiro
+    await db.refresh(novo_barbeiro)
+
+    return novo_barbeiro
 
 
 async def atualizar_barbeiro(
-    db: AsyncSession, barbeiro_id: int, nome: str, telefone: str
-):
+    db: AsyncSession,
+    barbeiro_id: int,
+    nome: str,
+    telefone: str,
+) -> Barbeiro:
+
+    nome_formatado = format_name(nome)
+    telefone_formatado = format_phone_for_storage(telefone)
+
     stmt = select(Barbeiro).where(Barbeiro.id == barbeiro_id)
-    result = await db.execute(stmt)
-    barbeiro = result.scalars().first()
+    res = await db.execute(stmt)
+    barbeiro = res.scalars().first()
+
     if not barbeiro:
         raise ValueError("Barbeiro não encontrado")
-    barbeiro.nome = nome.title()
-    barbeiro.telefone = telefone
+
+    barbeiro.nome = nome_formatado
+    barbeiro.telefone = telefone_formatado
+
     await db.commit()
     await db.refresh(barbeiro)
+
     return barbeiro
 
 
@@ -169,26 +213,59 @@ async def get_servicos(db: AsyncSession):
     return result.scalars().all()
 
 
-async def criar_servico(db: AsyncSession, nome: str, preco: Decimal):
-    servico = Servico(nome=nome, preco=preco)
-    db.add(servico)
+async def criar_servico(
+    db: AsyncSession,
+    nome: str,
+    preco: float,
+    duracao_minutos: int = None,
+) -> Servico:
+    """Cria um novo serviço com nome padronizado"""
+
+    nome_formatado = format_name(nome)
+
+    stmt_check = select(Servico).where(Servico.nome.ilike(nome_formatado))
+    if (await db.execute(stmt_check)).scalars().first():
+        raise ValueError("Serviço já cadastrado!")
+
+    novo_servico = Servico(
+        nome=nome_formatado,  # ← ✅ Nome formatado
+        preco=preco,
+        duracao_minutos=duracao_minutos,
+    )
+
+    db.add(novo_servico)
     await db.commit()
-    await db.refresh(servico)
-    return servico
+    await db.refresh(novo_servico)
+
+    return novo_servico
 
 
 async def atualizar_servico(
-    db: AsyncSession, servico_id: int, nome: str, preco: Decimal
-):
+    db: AsyncSession,
+    servico_id: int,
+    nome: str,
+    preco: float,
+    duracao_minutos: int = None,
+) -> Servico:
+    """Atualiza serviço com nome padronizado"""
+
+    nome_formatado = format_name(nome)
+
     stmt = select(Servico).where(Servico.id == servico_id)
-    result = await db.execute(stmt)
-    servico = result.scalars().first()
+    res = await db.execute(stmt)
+    servico = res.scalars().first()
+
     if not servico:
         raise ValueError("Serviço não encontrado")
-    servico.nome = nome
+
+    servico.nome = nome_formatado
     servico.preco = preco
+    if duracao_minutos is not None:
+        servico.duracao_minutos = duracao_minutos
+
     await db.commit()
     await db.refresh(servico)
+
     return servico
 
 
@@ -213,27 +290,64 @@ async def get_produtos(db: AsyncSession):
     return result.scalars().all()
 
 
-async def criar_produto(db: AsyncSession, nome: str, preco: Decimal, estoque: int):
-    produto = Produto(nome=nome, preco=preco, estoque=estoque)
-    db.add(produto)
+async def criar_produto(
+    db: AsyncSession,
+    nome: str,
+    preco: float,
+    estoque: int = 0,
+    descricao: str = None,
+) -> Produto:
+
+    nome_formatado = format_name(nome)
+
+    # Verificar duplicidade
+    stmt_check = select(Produto).where(Produto.nome.ilike(nome_formatado))
+    if (await db.execute(stmt_check)).scalars().first():
+        raise ValueError("Produto já cadastrado!")
+
+    novo_produto = Produto(
+        nome=nome_formatado,
+        preco=preco,
+        estoque=estoque,
+        descricao=descricao,
+    )
+
+    db.add(novo_produto)
     await db.commit()
-    await db.refresh(produto)
-    return produto
+    await db.refresh(novo_produto)
+
+    return novo_produto
 
 
 async def atualizar_produto(
-    db: AsyncSession, produto_id: int, nome: str, preco: Decimal, estoque: int
-):
+    db: AsyncSession,
+    produto_id: int,
+    nome: str,
+    preco: float,
+    estoque: int = None,
+    descricao: str = None,
+) -> Produto:
+    """Atualiza produto com nome padronizado"""
+
+    nome_formatado = format_name(nome)
+
     stmt = select(Produto).where(Produto.id == produto_id)
-    result = await db.execute(stmt)
-    produto = result.scalars().first()
+    res = await db.execute(stmt)
+    produto = res.scalars().first()
+
     if not produto:
         raise ValueError("Produto não encontrado")
-    produto.nome = nome
+
+    produto.nome = nome_formatado
     produto.preco = preco
-    produto.estoque = estoque
+    if estoque is not None:
+        produto.estoque = estoque
+    if descricao is not None:
+        produto.descricao = descricao
+
     await db.commit()
     await db.refresh(produto)
+
     return produto
 
 

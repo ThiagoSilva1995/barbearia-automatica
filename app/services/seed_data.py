@@ -1,4 +1,3 @@
-# cria_dono.py (Rode uma vez: python cria_dono.py)
 import asyncio
 from app.database import AsyncSessionLocal
 from app.models.barbeiro import Barbeiro

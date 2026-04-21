@@ -1,7 +1,8 @@
+# app/main.py
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
-from app.database import engine, Base, AsyncSessionLocal  # Importe AsyncSessionLocal
+from app.database import engine, Base, AsyncSessionLocal
 from app.models.configuracao import Configuracao
 from app.routers import (
     auth,
@@ -10,24 +11,44 @@ from app.routers import (
     relatorios,
     cliente_publico,
     admin_config,
+    fila_espera,  # ← NOVO: Router da fila inteligente
 )
-from app.services.reminder_service import loop_de_verificacao  # Importe o loop
+from app.services.reminder_service import loop_de_verificacao
+from app.services.fila_inteligente_service import FilaInteligenteService  # ← NOVO
 import os
 import asyncio
 import logging
+from datetime import datetime
 
 # Configuração básica de logging
 logging.basicConfig(
-    level=logging.INFO,  # Produção: INFO; Desenvolvimento: DEBUG
+    level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.StreamHandler(),  # Logs no console
-        # Opcional: logging.FileHandler("app.log"),  # Logs em arquivo
+        logging.StreamHandler(),
     ],
 )
 
+logger = logging.getLogger(__name__)
+
+
+async def verificar_filas_expiradas_background():
+    """
+    Background task: Verifica filas expiradas a cada 1 minuto
+    """
+    while True:
+        try:
+
+            fila_service = FilaInteligenteService()
+            await fila_service.verificar_expiracoes()
+        except Exception as e:
+            logger.error(f"Erro ao verificar filas expiradas: {e}")
+
+        await asyncio.sleep(60)
+
 
 async def lifespan(app: FastAPI):
+    # Criar tabelas no banco
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     print("✅ Banco de dados pronto! (Tabelas verificadas)")
@@ -35,12 +56,18 @@ async def lifespan(app: FastAPI):
     # Inicia o robô de lembretes em segundo plano
     asyncio.create_task(loop_de_verificacao(AsyncSessionLocal))
 
+    # ← NOVO: Inicia verificador de filas expiradas
+    asyncio.create_task(verificar_filas_expiradas_background())
+
+    print("🤖 Robô de Lembretes e Fila Inteligente Iniciado...")
+
     yield
 
 
 app = FastAPI(title="Gestão de Barbearia", lifespan=lifespan)
 app.add_middleware(SessionMiddleware, secret_key="sua_chave_secreta_forte_123")
 
+# Configurar static files
 static_path = "app/static"
 if not os.path.exists(static_path):
     os.makedirs(static_path)
@@ -49,12 +76,15 @@ if not os.path.exists(static_path):
 
 app.mount("/static", StaticFiles(directory=static_path), name="static")
 
+# Incluir routers
 app.include_router(auth.router)
 app.include_router(agenda.router)
 app.include_router(cadastros.router)
 app.include_router(relatorios.router)
 app.include_router(cliente_publico.router)
 app.include_router(admin_config.router)
+app.include_router(fila_espera.router)
+
 
 if __name__ == "__main__":
     import uvicorn

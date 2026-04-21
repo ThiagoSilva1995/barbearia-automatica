@@ -8,9 +8,9 @@ from datetime import datetime, timedelta, date
 import pytz
 import asyncio
 import logging
-
-# ← IMPORTS DOS UTILITÁRIOS (no topo, como deve ser)
+from app.utils.formatters import format_name
 from app.utils.phone_utils import format_phone_for_storage, normalize_phone_for_search
+from app.services.fila_inteligente_service import FilaInteligenteService
 
 from app.services.smart_schedule_service import disparar_efeito_dominio
 
@@ -54,30 +54,56 @@ async def area_cliente_acesso(request: Request):
 @router.post("/cliente/acessar")
 async def cliente_acessar_action(request: Request, db: AsyncSession = Depends(get_db)):
     form_data = await request.form()
+
     # ← MODIFICADO: Normaliza para busca flexível
     telefone_raw = form_data.get("telefone", "")
-    telefone_busca = normalize_phone_for_search(
-        telefone_raw
-    )  # ← Extrai últimos 9-11 dígitos
+    telefone_busca = normalize_phone_for_search(telefone_raw)
 
     if not telefone_busca:
         return RedirectResponse(
             url="/cliente?erro=Digite+o+telefone", status_code=status.HTTP_303_SEE_OTHER
         )
 
-    # Busca flexível: encontra mesmo se banco tem 55 e usuário digitou sem
+    # Busca flexível
     stmt = select(Cliente).where(Cliente.telefone.like(f"%{telefone_busca}"))
     res = await db.execute(stmt)
     cliente = res.scalars().first()
 
     if cliente:
+        # ✅ Login bem-sucedido: salvar na sessão
         request.session["cliente_id"] = cliente.id
         request.session["cliente_nome"] = cliente.nome
-        return RedirectResponse(
-            url="/cliente/meus-agendamentos", status_code=status.HTTP_303_SEE_OTHER
-        )
+
+        # ✅ VERIFICAR REDIRECT - PRIORIDADE:
+        # 1) form_data (campo hidden do template)
+        # 2) query_params da URL original (fallback se template falhar)
+        redirect_url = form_data.get("redirect")
+
+        # ← FALLBACK: Se não veio no form, pegar da URL original
+        if not redirect_url:
+            # Pegar o Referer ou reconstruir da sessão
+            referer = request.headers.get("referer", "")
+            if "redirect=" in referer:
+                # Extrair redirect do referer
+                from urllib.parse import urlparse, parse_qs
+
+                parsed = urlparse(referer)
+                params = parse_qs(parsed.query)
+                redirect_url = params.get("redirect", [None])[0]
+
+        if redirect_url:
+            logger.info(f"🔍 Redirect encontrado: {redirect_url}")
+            return RedirectResponse(
+                url=redirect_url,
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
+        else:
+            logger.info("🔍 Sem redirect, indo para padrão")
+            return RedirectResponse(
+                url="/cliente/meus-agendamentos",
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
     else:
-        # ← MODIFICADO: Passa o telefone raw para pré-preencher o cadastro
         return RedirectResponse(
             url=f"/cliente/cadastro?telefone={telefone_raw}",
             status_code=status.HTTP_303_SEE_OTHER,
@@ -104,9 +130,9 @@ async def cliente_cadastrar_action(
     form_data = await request.form()
     try:
         nome = form_data.get("nome")
-        # ← MODIFICADO: Usa a função de padronização
+        nome_formatado = format_name(nome)
         telefone_raw = form_data.get("telefone", "")
-        telefone = format_phone_for_storage(telefone_raw)  # ← GARANTE 55+DDD+NÚMERO
+        telefone = format_phone_for_storage(telefone_raw)
 
         data_nasc_str = form_data.get("data_nascimento")
 
@@ -115,7 +141,6 @@ async def cliente_cadastrar_action(
 
         data_nasc = datetime.strptime(data_nasc_str, "%Y-%m-%d").date()
 
-        # ← MODIFICADO: Busca usa normalização para encontrar mesmo com formato diferente
         stmt_check = select(Cliente).where(
             Cliente.telefone.like(f"%{telefone[-9:]}")  # Busca pelos últimos 9 dígitos
         )
@@ -123,8 +148,8 @@ async def cliente_cadastrar_action(
             raise ValueError("Telefone já cadastrado!")
 
         novo_cliente = Cliente(
-            nome=nome.title(),
-            telefone=telefone,  # ← Salva padronizado: 5573999999999
+            nome=nome_formatado,
+            telefone=telefone,
             data_nascimento=data_nasc,
             parabens_enviado=False,
         )
@@ -413,13 +438,39 @@ async def cliente_editar_agendamento_form(
         (await db.execute(select(Servico).order_by(Servico.nome))).scalars().all()
     )
 
-    # Gera lista de horários sugeridos (igual na tela de novo agendamento)
+    # ←←←←← CÓDIGO ADICIONADO: Filtrar horários ocupados ←←←←←
+
+    # Gera lista de horários sugeridos
     horarios_sugeridos = []
     inicio = datetime.strptime("08:00", "%H:%M")
     fim = datetime.strptime("19:00", "%H:%M")
     while inicio <= fim:
         horarios_sugeridos.append(inicio.strftime("%H:%M"))
         inicio += timedelta(minutes=30)
+
+    # ← Buscar horários ocupados na data do agendamento atual
+    stmt_ocupados = select(Agendamento.hora, Agendamento.barbeiro_id).where(
+        Agendamento.data == agd.data,
+        Agendamento.barbeiro_id == agd.barbeiro_id,  # Mesmo barbeiro
+        Agendamento.id
+        != agendamento_id,  # ← EXCLUIR o próprio agendamento sendo editado!
+    )
+
+    ocupados = (await db.execute(stmt_ocupados)).all()
+
+    # ← Filtrar para mostrar só horários livres
+    horarios_livres = []
+    for h_str in horarios_sugeridos:
+        h_time = datetime.strptime(h_str, "%H:%M").time()
+        esta_livre = True
+        for occ_hora, occ_barb_id in ocupados:
+            if occ_hora == h_time and occ_barb_id == agd.barbeiro_id:
+                esta_livre = False
+                break
+        if esta_livre:
+            horarios_livres.append(h_str)
+
+    # ←←←←← FIM DO CÓDIGO ADICIONADO ←←←←←
 
     # IDs dos serviços atuais para marcar os checkboxes
     servicos_atuais_ids = [s.id for s in agd.servicos]
@@ -434,7 +485,7 @@ async def cliente_editar_agendamento_form(
             "agendamento": agd,
             "barbeiros": barbeiros,
             "servicos": servicos,
-            "horarios_sugeridos": horarios_sugeridos,
+            "horarios_sugeridos": horarios_livres,  # ← Passar lista filtrada!
             "servicos_atuais_ids": servicos_atuais_ids,
             "hoje": hoje,
             "erro": erro_msg,
@@ -489,7 +540,8 @@ async def cliente_editar_agendamento_action(
         if ocupado:
             raise ValueError("Este novo horário já está ocupado!")
 
-        # 3. Salvar dados ANTIGOS para a mensagem
+        # 3. Salvar dados ANTIGOS para a mensagem e para a fila inteligente
+        horario_antigo = datetime.combine(agd.data, agd.hora)
         data_antiga_fmt = agd.data.strftime("%d/%m/%Y")
         hora_antiga_fmt = agd.hora.strftime("%H:%M")
 
@@ -506,7 +558,7 @@ async def cliente_editar_agendamento_action(
 
         await db.commit()
 
-        # 5. Enviar Aviso Automático
+        # 5. Enviar Aviso Automático para a Barbearia
         stmt_config = select(Configuracao).limit(1)
         config = (await db.execute(stmt_config)).scalars().first()
         telefone_barbearia = config.telefone_barbearia if config else ""
@@ -529,19 +581,28 @@ async def cliente_editar_agendamento_action(
                 servicos_nomes=nomes_novos_servicos,
             )
 
-            # Dispara o envio em segundo plano (NÃO ABRE NAVEGADOR)
+            # Dispara o envio em segundo plano
             asyncio.create_task(
                 enviar_mensagem_automatica(telefone_barbearia, msg_aviso)
             )
 
-            # Redireciona direto
-            return RedirectResponse(
-                url="/cliente/meus-agendamentos?msg=Agendamento+alterado!+Aviso+enviado+automaticamente.",
-                status_code=status.HTTP_303_SEE_OTHER,
+        # 6. 🚀 INICIAR EFEITO CASCATA (Fila Inteligente)
+        # Só inicia se o barbeiro não mudou (mesma agenda)
+        if agd.barbeiro_id == novo_barbeiro_id:
+            from app.services.fila_inteligente_service import FilaInteligenteService
+
+            fila_service = FilaInteligenteService()
+            asyncio.create_task(
+                fila_service.criar_cascata_horario_vago(
+                    horario_vago=horario_antigo,
+                    cliente_que_libertou_id=cliente_id,
+                    horario_novo=datetime.combine(nova_data, nova_hora),
+                )
             )
 
+        # Redireciona direto
         return RedirectResponse(
-            url="/cliente/meus-agendamentos?msg=Agendamento+alterado+com+sucesso!",
+            url="/cliente/meus-agendamentos?msg=Agendamento+alterado!+Aviso+enviado+automaticamente.",
             status_code=status.HTTP_303_SEE_OTHER,
         )
 

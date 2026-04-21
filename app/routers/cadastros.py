@@ -8,6 +8,8 @@ from sqlalchemy import select
 from app.database import get_db
 from app.models import Cliente, Barbeiro, Servico, Produto
 from app.services import admin_service
+from app.utils.formatters import format_name
+from app.utils.phone_utils import format_phone_for_storage
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -179,9 +181,12 @@ async def listar_servicos(request: Request, db: AsyncSession = Depends(get_db)):
 async def criar_servico(request: Request, db: AsyncSession = Depends(get_db)):
     form_data = await request.form()
     try:
+        # ✅ Formatar nome do serviço para Title Case
+        nome_formatado = format_name(form_data["nome"])
+
         db.add(
             Servico(
-                nome=form_data["nome"],
+                nome=nome_formatado,
                 preco=Decimal(form_data["preco"].replace(",", ".")),
             )
         )
@@ -237,9 +242,11 @@ async def listar_produtos(request: Request, db: AsyncSession = Depends(get_db)):
 async def criar_produto(request: Request, db: AsyncSession = Depends(get_db)):
     form_data = await request.form()
     try:
+        nome_formatado = format_name(form_data["nome"])
+
         db.add(
             Produto(
-                nome=form_data["nome"],
+                nome=nome_formatado,
                 preco=Decimal(form_data["preco"].replace(",", ".")),
                 estoque=int(form_data["estoque"]),
             )
@@ -314,6 +321,9 @@ async def salvar_barbeiro(request: Request, db: AsyncSession = Depends(get_db)):
 
     form = await request.form()
     nome = form.get("nome")
+    nome_formatado = format_name(nome)
+
+    # Padronizar telefone (mantém sua lógica original)
     telefone = "".join(filter(str.isdigit, form.get("telefone", "")))
     id_barbeiro = form.get("id_barbeiro")
 
@@ -323,10 +333,11 @@ async def salvar_barbeiro(request: Request, db: AsyncSession = Depends(get_db)):
             res = await db.execute(stmt)
             barbeiro = res.scalars().first()
             if barbeiro:
-                barbeiro.nome = nome
+                barbeiro.nome = nome_formatado
                 barbeiro.telefone = telefone
         else:
-            novo_barbeiro = Barbeiro(nome=nome, telefone=telefone)
+            # ✅ Criar novo com nome formatado
+            novo_barbeiro = Barbeiro(nome=nome_formatado, telefone=telefone)
             db.add(novo_barbeiro)
 
         await db.commit()
