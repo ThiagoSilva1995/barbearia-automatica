@@ -1,0 +1,60 @@
+{% extends "cliente/base_cliente.html" %}
+{% block title %}Confirmar Horário - Barbearia{% endblock %}
+
+{% block content %}
+<div class="min-h-screen flex items-center justify-center bg-gradient-to-br from-blue-50 to-indigo-100 py-12 px-4">
+    <div class="max-w-md w-full bg-white rounded-2xl shadow-xl p-8 text-center">
+
+        <!-- Ícone -->
+        <div class="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
+            <i class="fas fa-clock text-3xl text-green-600"></i>
+        </div>
+
+        <!-- Título -->
+        <h1 class="text-2xl font-bold text-gray-900 mb-2">
+            Olá, {{ nome_cliente }}! 👋
+        </h1>
+
+        <!-- Mensagem -->
+        <p class="text-gray-600 mb-6">
+            Liberou um horário especial para você:
+        </p>
+
+        <!-- Card do Horário -->
+        <div class="bg-blue-50 border-2 border-blue-200 rounded-xl p-6 mb-8">
+            <div class="text-4xl font-bold text-blue-700 mb-2">
+                🕐 {{ horario }}
+            </div>
+            <div class="text-lg text-blue-600">
+                📅 {{ data }}
+            </div>
+        </div>
+
+        <!-- Botões de Ação -->
+        <div class="space-y-4">
+            <!-- Aceitar -->
+            <form method="POST" action="/fila-espera/confirmar/{{ fila_id }}/aceitar">
+                <button type="submit"
+                    class="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-4 px-6 rounded-xl transition transform hover:scale-105 flex items-center justify-center gap-3">
+                    <i class="fas fa-check-circle text-xl"></i>
+                    ✅ Confirmar Horário
+                </button>
+            </form>
+
+            <!-- Recusar -->
+            <form method="POST" action="/fila-espera/confirmar/{{ fila_id }}/recusar">
+                <button type="submit"
+                    class="w-full bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold py-4 px-6 rounded-xl transition flex items-center justify-center gap-3">
+                    <i class="fas fa-times-circle text-xl"></i>
+                    ❌ Recusar
+                </button>
+            </form>
+        </div>
+
+        <!-- Rodapé -->
+        <p class="text-xs text-gray-400 mt-8">
+            ⏰ Esta oferta expira em 10 minutos
+        </p>
+    </div>
+</div>
+{% endblock %}

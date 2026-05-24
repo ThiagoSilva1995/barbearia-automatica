@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}Meu Perfil - Segurança{% endblock %}
+{% block content %}
+<div class="max-w-4xl mx-auto space-y-8">
+    <div class="flex items-center gap-4">
+        <div class="bg-blue-600 text-white w-16 h-16 rounded-full flex items-center justify-center text-2xl font-bold shadow-lg">
+            {{ config.admin_nome[:1].upper() if config.admin_nome else 'A' }}
+        </div>
+        <div>
+            <h1 class="text-3xl font-bold text-gray-800">Meu Perfil</h1>
+            <p class="text-gray-600">Gerencie suas informações de acesso e segurança.</p>
+        </div>
+    </div>
+
+    {% if msg %}<div class="p-4 bg-green-100 text-green-800 rounded-lg shadow-sm border-l-4 border-green-500">{{ msg }}</div>{% endif %}
+    {% if erro %}<div class="p-4 bg-red-100 text-red-800 rounded-lg shadow-sm border-l-4 border-red-500">{{ erro }}</div>{% endif %}
+
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
+        <!-- Informações Pessoais -->
+        <div class="md:col-span-2 space-y-6">
+            <div class="bg-white p-6 rounded-xl shadow-md border border-gray-100">
+                <h2 class="text-xl font-bold mb-6 text-gray-800 flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-blue-500" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd" />
+                    </svg>
+                    Informações da Conta
+                </h2>
+                <form action="/admin/perfil/salvar" method="POST" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-semibold text-gray-700 mb-1">Nome Completo</label>
+                        <input type="text" name="admin_nome" value="{{ config.admin_nome }}" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-gray-700 mb-1">Usuário de Login</label>
+                        <input type="text" name="admin_login" value="{{ config.admin_login }}" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all">
+                    </div>
+                    <button type="submit" class="bg-blue-600 text-white px-6 py-2.5 rounded-lg font-semibold hover:bg-blue-700 transition-colors shadow-md">
+                        Atualizar Dados
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Segurança / Senha -->
+        <div class="space-y-6">
+            <div class="bg-white p-6 rounded-xl shadow-md border border-gray-100">
+                <h2 class="text-xl font-bold mb-6 text-gray-800 flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-red-500" viewBox="0 0 20 20" fill="currentColor">
+                        <path fill-rule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clip-rule="evenodd" />
+                    </svg>
+                    Segurança
+                </h2>
+                <form action="/admin/perfil/trocar_senha" method="POST" class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-semibold text-gray-700 mb-1">Senha Atual</label>
+                        <input type="password" name="senha_atual" required class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none transition-all">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-gray-700 mb-1">Nova Senha</label>
+                        <input type="password" name="nova_senha" required class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none transition-all">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-semibold text-gray-700 mb-1">Confirmar Nova Senha</label>
+                        <input type="password" name="confirmar_senha" required class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none transition-all">
+                    </div>
+                    <button type="submit" class="w-full bg-red-600 text-white px-6 py-2.5 rounded-lg font-semibold hover:bg-red-700 transition-colors shadow-md">
+                        Alterar Senha
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

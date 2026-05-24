@@ -1,0 +1,37 @@
+# Ambiente virtual Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Arquivos de ambiente e senhas (NUNCA suba para o GitHub!)
+.env
+*.env.local
+
+# Banco de dados local (se usar SQLite)
+*.db
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker (opcional - se quiser subir apenas o compose)
+!docker-compose.yml
+!Dockerfile
+!.dockerignore
+
+# Node modules (se houver frontend com npm)
+node_modules/
+
+# Arquivos de sistema
+.DS_Store
+Thumbs.db
