@@ -1,65 +1,71 @@
-import asyncio
-import sys
-import os
+# app/atualizar_tabelas.py
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
+import logging
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from app.database import engine, Base
-from app.models.configuracao import Configuracao  # Importa o modelo atualizado
+logger = logging.getLogger(__name__)
 
 
-async def atualizar_estrutura():
-    print("🔨 Conectando ao banco para atualizar estruturas...")
-    async with engine.begin() as conn:
-        # O create_all é inteligente: ele cria tabelas que faltam e ignora as que já existem
-        # MAS ele não adiciona colunas novas em tabelas existentes no PostgreSQL por padrão.
-        # Para resolver isso sem migradores complexos (Alembic), vamos usar um truque seguro:
-
-        # 1. Criar todas as tabelas (garante que novas existam)
-        await conn.run_sync(Base.metadata.create_all)
-
-        # 2. Verificar se a coluna falta e adicionar manualmente se necessário
-        # Isso é necessário porque o PostgreSQL é rígido com alterações de schema
-        from sqlalchemy import text
-
-        try:
-            # Tenta selecionar a coluna nova. Se falhar, ela não existe.
-            await conn.execute(
-                text("SELECT horario_inicio_manha FROM configuracoes LIMIT 1")
+async def atualizar_tabela_configuracoes(db: AsyncSession):
+    try:
+        colunas_esperadas = {
+            "horario_inicio_manha": "VARCHAR DEFAULT '08:30'",
+            "horario_fim_manha": "VARCHAR DEFAULT '11:00'",
+            "horario_inicio_tarde": "VARCHAR DEFAULT '14:00'",
+            "horario_fim_tarde": "VARCHAR DEFAULT '18:30'",
+            "intervalo_minutos": "INTEGER DEFAULT 30",
+            "admin_senha": "VARCHAR DEFAULT 'admin123'",
+        }
+        for coluna, definicao in colunas_esperadas.items():
+            sql = text(
+                f"ALTER TABLE configuracoes ADD COLUMN IF NOT EXISTS {coluna} {definicao}"
             )
-            print("✅ Colunas de horário já existem.")
-        except Exception:
-            print("⚠️ Colunas de horário não encontradas. Adicionando agora...")
-            # Adiciona as colunas que faltam no modelo Configuracao
-            await conn.execute(
-                text(
-                    "ALTER TABLE configuracoes ADD COLUMN IF NOT EXISTS horario_inicio_manha VARCHAR DEFAULT '08:30'"
-                )
-            )
-            await conn.execute(
-                text(
-                    "ALTER TABLE configuracoes ADD COLUMN IF NOT EXISTS horario_fim_manha VARCHAR DEFAULT '11:00'"
-                )
-            )
-            await conn.execute(
-                text(
-                    "ALTER TABLE configuracoes ADD COLUMN IF NOT EXISTS horario_inicio_tarde VARCHAR DEFAULT '14:00'"
-                )
-            )
-            await conn.execute(
-                text(
-                    "ALTER TABLE configuracoes ADD COLUMN IF NOT EXISTS horario_fim_tarde VARCHAR DEFAULT '18:30'"
-                )
-            )
-            await conn.execute(
-                text(
-                    "ALTER TABLE configuracoes ADD COLUMN IF NOT EXISTS intervalo_minutos INTEGER DEFAULT 30"
-                )
-            )
-            print("✅ Colunas adicionadas com sucesso!")
-
-    print("🎉 Estrutura do banco atualizada!")
+            await db.execute(sql)
+        await db.commit()
+        logger.info("✅ Tabela 'configuracoes' verificada")
+    except Exception as e:
+        logger.error(f"❌ Erro em configuracoes: {e}")
+        await db.rollback()
+        raise
 
 
-if __name__ == "__main__":
-    asyncio.run(atualizar_estrutura())
+async def atualizar_tabela_agendamentos(db: AsyncSession):
+    try:
+        colunas_esperadas = {
+            "is_confirmed": "BOOLEAN DEFAULT FALSE",
+            "pago": "BOOLEAN DEFAULT FALSE",
+            "observacoes": "TEXT",
+            "duracao_minutos": "INTEGER DEFAULT 30",  # ← Para rastrear duração
+        }
+        for coluna, definicao in colunas_esperadas.items():
+            sql = text(
+                f"ALTER TABLE agendamentos ADD COLUMN IF NOT EXISTS {coluna} {definicao}"
+            )
+            await db.execute(sql)
+        await db.commit()
+        logger.info("✅ Tabela 'agendamentos' verificada")
+    except Exception as e:
+        logger.error(f"❌ Erro em agendamentos: {e}")
+        await db.rollback()
+
+
+async def atualizar_tabela_servicos(db: AsyncSession):
+    try:
+        sql = text(
+            "ALTER TABLE servicos ADD COLUMN IF NOT EXISTS duracao_minutos INTEGER DEFAULT 30"
+        )
+        await db.execute(sql)
+        await db.commit()
+        logger.info("✅ Tabela 'servicos' atualizada")
+    except Exception as e:
+        logger.error(f"❌ Erro em servicos: {e}")
+        await db.rollback()
+        raise
+
+
+async def executar_migracoes(db: AsyncSession):
+    logger.info("🔄 Iniciando migrações...")
+    await atualizar_tabela_configuracoes(db)
+    await atualizar_tabela_agendamentos(db)
+    await atualizar_tabela_servicos(db)
+    logger.info("✅ Migrações concluídas!")

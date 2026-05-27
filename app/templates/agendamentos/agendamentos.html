@@ -129,17 +129,24 @@
                     <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                         {% if not agd.pago %}
                         <a href="/confirmar-pagamento/{{ agd.id }}"
-                            class="text-green-600 hover:text-green-900 font-bold mr-3">
+                            class="text-green-600 hover:text-green-900 font-bold mr-2">
                             <i class="fas fa-dollar-sign"></i> Pagar
                         </a>
                         {% else %}
-                        <span class="text-gray-400 mr-3 text-xs"><i class="fas fa-check"></i> Pago</span>
+                        <span class="text-gray-400 mr-2 text-xs"><i class="fas fa-check"></i> Pago</span>
                         {% endif %}
 
-                        <a href="/editar-agendamento/{{ agd.id }}" class="text-blue-600 hover:text-blue-900 mr-3"
+                        <a href="/editar-agendamento/{{ agd.id }}" class="text-blue-600 hover:text-blue-900 mr-2"
                             title="Editar">
                             <i class="fas fa-edit"></i>
                         </a>
+
+                        <!-- ✅ NOVO BOTÃO: Fila Manual -->
+                        <button onclick="abrirModalFila('{{ agd.data.isoformat() }}T{{ agd.hora.isoformat() }}')"
+                            class="text-purple-600 hover:text-purple-800 hover:bg-purple-50 p-2 rounded-lg transition mr-2"
+                            title="Oferecer este horário para outros clientes">
+                            <i class="fas fa-bolt"></i>
+                        </button>
 
                         <a href="/remover-agendamento/{{ agd.id }}"
                             onclick="return confirm('Tem certeza que deseja excluir?')"
@@ -161,4 +168,22 @@
         </table>
     </div>
 </div>
+
+<!-- ✅ SCRIPT PARA CARREGAR O MODAL DINAMICAMENTE -->
+<script>
+    async function abrirModalFila(horarioIso) {
+        try {
+            const response = await fetch(`/fila/manual/${encodeURIComponent(horarioIso)}`);
+            if (!response.ok) throw new Error('Falha ao carregar lista de clientes');
+            const html = await response.text();
+
+            // Injeta o modal no DOM
+            const container = document.createElement('div');
+            container.innerHTML = html;
+            document.body.appendChild(container.firstElementChild);
+        } catch (err) {
+            alert('❌ Erro: ' + err.message);
+        }
+    }
+</script>
 {% endblock %}

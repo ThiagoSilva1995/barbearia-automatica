@@ -172,7 +172,7 @@ async def listar_servicos(request: Request, db: AsyncSession = Depends(get_db)):
 
 @router.post("/servicos")
 async def criar_servico(request: Request, db: AsyncSession = Depends(get_db)):
-    """Cria um novo serviço"""
+    """Cria um novo serviço com duração estimada"""
     if request.session.get("user_role") != "admin":
         return RedirectResponse(url="/login?erro=Acesso+negado", status_code=303)
 
@@ -181,6 +181,10 @@ async def criar_servico(request: Request, db: AsyncSession = Depends(get_db)):
         nome_formatado = format_name(form_data["nome"])
         preco = Decimal(str(form_data["preco"]).replace(",", "."))
 
+        # ✅ Captura duração minutos (padrão 30 se não enviado)
+        duracao_str = form_data.get("duracao_minutos", "30")
+        duracao_minutos = int(duracao_str) if duracao_str.isdigit() else 30
+
         # Verifica duplicidade
         stmt_check = select(Servico).where(Servico.nome.ilike(nome_formatado))
         if (await db.execute(stmt_check)).scalars().first():
@@ -188,7 +192,10 @@ async def criar_servico(request: Request, db: AsyncSession = Depends(get_db)):
                 url="/servicos?erro=Serviço+já+cadastrado", status_code=303
             )
 
-        db.add(Servico(nome=nome_formatado, preco=preco))
+        # ✅ Salva o serviço com a nova duração
+        db.add(
+            Servico(nome=nome_formatado, preco=preco, duracao_minutos=duracao_minutos)
+        )
         await db.commit()
         return RedirectResponse(url="/servicos?msg=sucesso", status_code=303)
     except Exception as e:

@@ -1,44 +1,49 @@
+# app/routers/cliente_publico.py
 from fastapi import APIRouter, Request, Depends, status, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime, timedelta, date, time
 import pytz
-from sqlalchemy import select
+from sqlalchemy import select, delete, insert
 from sqlalchemy.orm import selectinload
-from app.database import get_db
-from app.models import Cliente, Barbeiro, Servico, Agendamento
-from app.models.configuracao import Configuracao
+from app.database import get_db, AsyncSessionLocal
+from app.models import Cliente, Barbeiro, Servico, Agendamento, Configuracao
+from app.models.servico import agendamento_servico
 from app.schemas.agendamento import AgendamentoCreate
-from app.services.agendamento_service import criar_agendamento
+from app.services.agendamento_service import (
+    criar_agendamento,
+    verificar_disponibilidade,
+)
+
+# from app.services.fila_inteligente_service import FilaInteligenteService  # ← COMENTADO
+import asyncio
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 tz_br = pytz.timezone("America/Sao_Paulo")
 
 
-def gerar_horarios_disponiveis(config: Configuracao, data_alvo: date):
+def gerar_horarios_disponiveis(
+    config: Configuracao,
+    data_alvo: date,
+    duracao_servico: int = 30,
+    buffer_minutos: int = 10,  # Buffer fixo de 10 minutos
+):
     """
-    Gera horários válidos considerando dia da semana, horário atual e regra de sábado.
-
-    Regras:
-    - Domingo: Barbearia fechada (retorna lista vazia)
-    - Sábado: Funciona apenas até 12:00 (sem turno da tarde)
-    - Seg-Sex: Turnos manhã e tarde conforme configuração
-    - Hoje: Remove horários passados automaticamente
+    Gera horários válidos considerando:
+    - Dia da semana (Domingo fechado, Sábado até 12:00)
+    - Horário atual (se for hoje)
+    - Duração do serviço + buffer: Gera horários dinamicamente
     """
     hoje = datetime.now(tz_br).date()
     agora = datetime.now(tz_br)
-    dia_semana = data_alvo.weekday()  # 0=Seg, 5=Sáb, 6=Dom
+    dia_semana = data_alvo.weekday()
 
-    # Domingo: Barbearia fechada
-    if dia_semana == 6:
+    if dia_semana == 6:  # Domingo: fechado
         return []
 
     horarios = []
-    intervalo = config.intervalo_minutos if config and config.intervalo_minutos else 30
-
-    # Usa data base consistente para evitar problemas de comparação
     data_base = hoje
 
     try:
@@ -59,43 +64,39 @@ def gerar_horarios_disponiveis(config: Configuracao, data_alvo: date):
             datetime.strptime(config.horario_fim_tarde or "18:30", "%H:%M").time(),
         )
     except Exception:
-        # Fallback seguro em caso de erro
         inicio_m = datetime.combine(data_base, time(8, 30))
         fim_m = datetime.combine(data_base, time(11, 0))
         inicio_t = datetime.combine(data_base, time(14, 0))
         fim_t = datetime.combine(data_base, time(18, 30))
 
-    # 📅 Regra de Sábado: Fecha às 12:00
-    if dia_semana == 5:  # Sábado
+    # Sábado: fecha às 12:00
+    if dia_semana == 5:
         limite_sabado = datetime.combine(data_base, time(12, 0))
-
         if fim_m > limite_sabado:
             fim_m = limite_sabado
-
-        # Desativa turno da tarde no sábado
         inicio_t = datetime.combine(data_base, time(23, 0))
         fim_t = datetime.combine(data_base, time(22, 0))
 
-    def _adicionar(inicio, fim):
-        """Adiciona horários de inicio até fim com o intervalo configurado"""
-        count = 0
+    def _adicionar_horarios_dinamicos(inicio, fim, duracao_necessaria):
+        """
+        Gera horários dinamicamente baseados na duração do serviço + buffer
+        Ex: Se serviço = 45min + buffer 10min = 55min
+        Próximo horário = horário anterior + 55min
+        """
         atual = inicio
-        while atual <= fim:
+        tempo_total_por_agendamento = duracao_necessaria + buffer_minutos
+
+        while atual + timedelta(minutes=tempo_total_por_agendamento) <= fim:
             horarios.append(atual.strftime("%H:%M"))
-            atual += timedelta(minutes=intervalo)
-            count += 1
-            if count > 100:  # Segurança para evitar loop infinito
-                break
+            # Avança para o próximo horário baseado na duração + buffer
+            atual += timedelta(minutes=tempo_total_por_agendamento)
 
-    # Gera horários da manhã
     if inicio_m <= fim_m:
-        _adicionar(inicio_m, fim_m)
-
-    # Gera horários da tarde
+        _adicionar_horarios_dinamicos(inicio_m, fim_m, duracao_servico)
     if inicio_t < fim_t:
-        _adicionar(inicio_t, fim_t)
+        _adicionar_horarios_dinamicos(inicio_t, fim_t, duracao_servico)
 
-    # 🕒 Filtro para HOJE: remove horários passados
+    # Filtro para hoje: remove horários passados
     if data_alvo == hoje:
         hora_atual_str = agora.strftime("%H:%M")
         horarios = [h for h in horarios if h > hora_atual_str]
@@ -105,13 +106,11 @@ def gerar_horarios_disponiveis(config: Configuracao, data_alvo: date):
 
 @router.get("/cliente", response_class=HTMLResponse)
 async def area_cliente_home(request: Request):
-    """Redireciona para a página de acesso do cliente."""
     return templates.TemplateResponse("cliente/acesso.html", {"request": request})
 
 
 @router.post("/cliente/acessar")
 async def area_cliente_acessar(request: Request, db: AsyncSession = Depends(get_db)):
-    """Verifica se o cliente já existe pelo telefone."""
     form = await request.form()
     telefone = "".join(filter(str.isdigit, form.get("telefone", "")))
 
@@ -134,7 +133,6 @@ async def area_cliente_acessar(request: Request, db: AsyncSession = Depends(get_
 
 @router.post("/cliente/cadastrar")
 async def area_cliente_cadastrar(request: Request, db: AsyncSession = Depends(get_db)):
-    """Cadastra um novo cliente."""
     form = await request.form()
     nome = form.get("nome")
     telefone = form.get("telefone")
@@ -184,15 +182,37 @@ async def area_cliente_agendar(request: Request, db: AsyncSession = Depends(get_
     )
 
     stmt_config = select(Configuracao).limit(1)
-    res_config = await db.execute(stmt_config)
-    config = res_config.scalars().first()
+    config = (await db.execute(stmt_config)).scalars().first()
 
-    # ✅ Usa a função inteligente que já filtra sábado, domingo e horários passados
-    horarios_sugeridos = gerar_horarios_disponiveis(config, data_selecionada)
+    # ✅ Calcular duração total + buffer baseada nos serviços selecionados
+    servico_ids_param = request.query_params.getlist("servico")
+    duracao_total = 30
+    servicos_selecionados_ids = []
 
-    stmt_ocupados = select(Agendamento.hora, Agendamento.barbeiro_id).where(
-        Agendamento.data == data_selecionada
+    if servico_ids_param:
+        try:
+            ids = [int(s) for s in servico_ids_param]
+            servicos_selecionados_ids = ids
+            stmt_serv = select(Servico).where(Servico.id.in_(ids))
+            res_serv = await db.execute(stmt_serv)
+            servicos_sel = res_serv.scalars().all()
+            if servicos_sel:
+                duracao_total = sum(s.duracao_minutos for s in servicos_sel)
+        except Exception:
+            pass
+
+    # ✅ Adicionar buffer de 10 minutos entre agendamentos
+    duracao_com_buffer = duracao_total + 10
+
+    # Gera horários considerando duração + buffer
+    horarios_sugeridos = gerar_horarios_disponiveis(
+        config, data_selecionada, duracao_total
     )
+
+    # Busca agendamentos ocupados COM a duração de cada um
+    stmt_ocupados = select(
+        Agendamento.hora, Agendamento.duracao_minutos, Agendamento.barbeiro_id
+    ).where(Agendamento.data == data_selecionada)
     if barbeiro_id:
         stmt_ocupados = stmt_ocupados.where(Agendamento.barbeiro_id == int(barbeiro_id))
 
@@ -200,17 +220,32 @@ async def area_cliente_agendar(request: Request, db: AsyncSession = Depends(get_
     ocupados = ocupados_res.all()
     horarios_livres = []
 
+    # Verificação de conflito por INTERVALO (com buffer)
     for h_str in horarios_sugeridos:
         h_time = datetime.strptime(h_str, "%H:%M").time()
+
+        # Intervalo do NOVO agendamento (com buffer)
+        dt_inicio_novo = datetime.combine(data_selecionada, h_time)
+        dt_fim_novo = dt_inicio_novo + timedelta(minutes=duracao_com_buffer)
+
         esta_livre = True
-        for occ_hora, occ_barb_id in ocupados:
-            if occ_hora == h_time and (
-                not barbeiro_id or int(barbeiro_id) == occ_barb_id
-            ):
-                esta_livre = False
-                break
+        for occ_hora, occ_duracao, occ_barb_id in ocupados:
+            if not barbeiro_id or int(barbeiro_id) == occ_barb_id:
+                # Intervalo do agendamento EXISTENTE (com buffer também)
+                occ_dur = (occ_duracao or 30) + 10
+                dt_inicio_occ = datetime.combine(data_selecionada, occ_hora)
+                dt_fim_occ = dt_inicio_occ + timedelta(minutes=occ_dur)
+
+                # Sobreposição: (InícioA < FimB) e (FimA > InícioB)
+                if dt_inicio_novo < dt_fim_occ and dt_fim_novo > dt_inicio_occ:
+                    esta_livre = False
+                    break
+
         if esta_livre:
             horarios_livres.append(h_str)
+
+    # ✅ Obter horário selecionado (para manter marcado)
+    hora_selecionada = request.query_params.get("hora")
 
     return templates.TemplateResponse(
         "cliente/agendar.html",
@@ -226,6 +261,9 @@ async def area_cliente_agendar(request: Request, db: AsyncSession = Depends(get_
             "msg": request.query_params.get("msg"),
             "erro": request.query_params.get("erro"),
             "cliente_logado": True,
+            "duracao_total": duracao_total,
+            "servicos_selecionados_ids": servicos_selecionados_ids,
+            "hora_selecionada": hora_selecionada,
         },
     )
 
@@ -239,14 +277,32 @@ async def area_cliente_confirmar(request: Request, db: AsyncSession = Depends(ge
 
     try:
         servico_ids = [int(x) for x in form.getlist("servico")]
+
+        # ✅ Calcular duração total dos serviços selecionados para salvar no agendamento
+        stmt_serv = select(Servico).where(Servico.id.in_(servico_ids))
+        res_serv = await db.execute(stmt_serv)
+        servicos_sel = res_serv.scalars().all()
+        duracao_total = (
+            sum(s.duracao_minutos for s in servicos_sel) if servicos_sel else 30
+        )
+
         dados = AgendamentoCreate(
             cliente_id=cliente_id,
             barbeiro_id=int(form["barbeiro"]),
             data=datetime.strptime(form["data"], "%Y-%m-%d").date(),
             hora=datetime.strptime(form["hora"], "%H:%M").time(),
             servico_ids=servico_ids,
+            duracao_minutos=duracao_total,
         )
-        await criar_agendamento(db, dados)
+        novo_agd = await criar_agendamento(db, dados)
+
+        # Disparo do WhatsApp para novo agendamento
+        try:
+            await asyncio.sleep(0.5)
+            await enviar_notificacoes_agendamento(novo_agd.id)
+        except Exception as e:
+            print(f"⚠️ Erro ao enviar WhatsApp: {e}")
+
         return RedirectResponse(
             url="/cliente/meus-agendamentos?msg=Agendamento+realizado!", status_code=303
         )
@@ -272,7 +328,6 @@ async def area_cliente_meus_agendamentos(
     res = await db.execute(stmt)
     agendamentos = res.scalars().all()
 
-    # Definir data e hora atual para comparação no template
     agora = datetime.now(tz_br)
     hoje = agora.date()
     hora_atual = agora.time()
@@ -290,7 +345,7 @@ async def area_cliente_meus_agendamentos(
 
 
 # =============================================================================
-# NOVAS ROTAS: EDITAR/CANCELAR AGENDAMENTO (CLIENTE)
+# ROTAS DE EDIÇÃO/CANCELAMENTO (FILA INTELIGENTE DESATIVADA)
 # =============================================================================
 
 
@@ -298,18 +353,15 @@ async def area_cliente_meus_agendamentos(
 async def cliente_editar_agendamento(
     agendamento_id: int, request: Request, db: AsyncSession = Depends(get_db)
 ):
-    """Tela de edição de agendamento para o cliente."""
     cliente_id = request.session.get("cliente_id")
     if not cliente_id:
         return RedirectResponse(url="/cliente", status_code=303)
 
-    # Buscar agendamento e verificar se pertence ao cliente
     stmt = (
         select(Agendamento)
         .options(selectinload(Agendamento.barbeiro), selectinload(Agendamento.servicos))
         .where(Agendamento.id == agendamento_id, Agendamento.cliente_id == cliente_id)
     )
-
     res = await db.execute(stmt)
     agendamento = res.scalars().first()
 
@@ -319,7 +371,6 @@ async def cliente_editar_agendamento(
             status_code=303,
         )
 
-    # Só permite editar agendamentos futuros e não pagos
     agora = datetime.now(tz_br)
     data_hora_agd = tz_br.localize(datetime.combine(agendamento.data, agendamento.hora))
 
@@ -329,7 +380,6 @@ async def cliente_editar_agendamento(
             status_code=303,
         )
 
-    # Buscar dados para o formulário
     stmt_config = select(Configuracao).limit(1)
     config = (await db.execute(stmt_config)).scalars().first()
 
@@ -340,21 +390,41 @@ async def cliente_editar_agendamento(
         (await db.execute(select(Servico).order_by(Servico.nome))).scalars().all()
     )
 
-    # ✅ Usa função inteligente
-    horarios_sugeridos = gerar_horarios_disponiveis(config, agendamento.data)
+    # ✅ Calcula duração atual para gerar horários compatíveis
+    duracao_atual = agendamento.duracao_minutos or 30
+    horarios_sugeridos = gerar_horarios_disponiveis(
+        config, agendamento.data, duracao_atual
+    )
 
-    # Buscar horários ocupados (exceto o próprio agendamento sendo editado)
-    stmt_ocupados = select(Agendamento.hora).where(
+    stmt_ocupados = select(Agendamento.hora, Agendamento.duracao_minutos).where(
         Agendamento.data == agendamento.data,
         Agendamento.barbeiro_id == agendamento.barbeiro_id,
         Agendamento.id != agendamento_id,
     )
-    ocupados = (await db.execute(stmt_ocupados)).scalars().all()
-    horarios_livres = [
-        h
-        for h in horarios_sugeridos
-        if datetime.strptime(h, "%H:%M").time() not in ocupados
-    ]
+    ocupados = (await db.execute(stmt_ocupados)).all()
+
+    horarios_livres = []
+    for h_str in horarios_sugeridos:
+        h_time = datetime.strptime(h_str, "%H:%M").time()
+        # Intervalo do NOVO slot
+        dt_inicio_novo = datetime.combine(agendamento.data, h_time)
+        dt_fim_novo = dt_inicio_novo + timedelta(minutes=duracao_atual)
+
+        esta_livre = True
+        for occ_hora, occ_duracao in ocupados:
+            occ_dur = occ_duracao or 30
+            dt_inicio_occ = datetime.combine(agendamento.data, occ_hora)
+            dt_fim_occ = dt_inicio_occ + timedelta(minutes=occ_dur)
+
+            if dt_inicio_novo < dt_fim_occ and dt_fim_novo > dt_inicio_occ:
+                esta_livre = False
+                break
+        if esta_livre:
+            horarios_livres.append(h_str)
+
+    agora_edit = datetime.now(tz_br)
+    hoje_edit = agora_edit.date()
+    hora_atual_edit = agora_edit.time()
 
     return templates.TemplateResponse(
         "cliente/editar_agendamento.html",
@@ -367,6 +437,8 @@ async def cliente_editar_agendamento(
             "servicos_atuais_ids": [s.id for s in agendamento.servicos],
             "msg": request.query_params.get("msg"),
             "erro": request.query_params.get("erro"),
+            "hoje": hoje_edit,
+            "hora_atual": hora_atual_edit,
         },
     )
 
@@ -375,16 +447,20 @@ async def cliente_editar_agendamento(
 async def cliente_editar_agendamento_action(
     agendamento_id: int, request: Request, db: AsyncSession = Depends(get_db)
 ):
-    """Processa a edição do agendamento pelo cliente."""
     cliente_id = request.session.get("cliente_id")
     if not cliente_id:
         return RedirectResponse(url="/cliente", status_code=303)
 
     form = await request.form()
 
-    # Buscar agendamento
-    stmt = select(Agendamento).where(
-        Agendamento.id == agendamento_id, Agendamento.cliente_id == cliente_id
+    stmt = (
+        select(Agendamento)
+        .options(
+            selectinload(Agendamento.cliente),
+            selectinload(Agendamento.barbeiro),
+            selectinload(Agendamento.servicos),
+        )
+        .where(Agendamento.id == agendamento_id, Agendamento.cliente_id == cliente_id)
     )
     res = await db.execute(stmt)
     agendamento = res.scalars().first()
@@ -395,17 +471,36 @@ async def cliente_editar_agendamento_action(
             status_code=303,
         )
 
+    # Salvar dados antigos ANTES de alterar
+    data_antiga = agendamento.data.strftime("%d/%m/%Y")
+    hora_antiga = agendamento.hora.strftime("%H:%M")
+    horario_antigo_datetime = datetime.combine(agendamento.data, agendamento.hora)
+    barbeiro_nome = agendamento.barbeiro.nome
+    cliente_nome = agendamento.cliente.nome
+    servicos_nomes = [s.nome for s in agendamento.servicos]
+
     try:
         nova_data = datetime.strptime(form["data"], "%Y-%m-%d").date()
         nova_hora = datetime.strptime(form["hora"], "%H:%M").time()
         novo_barbeiro_id = int(form["barbeiro"])
         novos_servico_ids = [int(x) for x in form.getlist("servico")]
 
-        # Verificar disponibilidade do novo horário
-        from app.services.agendamento_service import verificar_disponibilidade
+        # ✅ Calcular NOVA duração
+        stmt_serv = select(Servico).where(Servico.id.in_(novos_servico_ids))
+        res_serv = await db.execute(stmt_serv)
+        servicos_sel = res_serv.scalars().all()
+        nova_duracao = (
+            sum(s.duracao_minutos for s in servicos_sel) if servicos_sel else 30
+        )
 
+        # Verificar disponibilidade do novo horário com a NOVA duração
         ocupado = await verificar_disponibilidade(
-            db, novo_barbeiro_id, nova_data, nova_hora, exclude_id=agendamento_id
+            db,
+            novo_barbeiro_id,
+            nova_data,
+            nova_hora,
+            duracao_minutos=nova_duracao,
+            exclude_id=agendamento_id,
         )
         if ocupado:
             return RedirectResponse(
@@ -413,20 +508,59 @@ async def cliente_editar_agendamento_action(
                 status_code=303,
             )
 
-        # Atualizar agendamento
+        # Atualizar dados básicos
         agendamento.data = nova_data
         agendamento.hora = nova_hora
         agendamento.barbeiro_id = novo_barbeiro_id
+        agendamento.duracao_minutos = nova_duracao
 
-        # Atualizar serviços
-        agendamento.servicos.clear()
+        # Atualizar serviços via SQL direto
+        await db.execute(
+            delete(agendamento_servico).where(
+                agendamento_servico.c.agendamento_id == agendamento_id
+            )
+        )
         if novos_servico_ids:
-            stmt_serv = select(Servico).where(Servico.id.in_(novos_servico_ids))
-            res_serv = await db.execute(stmt_serv)
-            for s in res_serv.scalars().all():
-                agendamento.servicos.append(s)
+            for serv_id in novos_servico_ids:
+                await db.execute(
+                    insert(agendamento_servico).values(
+                        agendamento_id=agendamento_id, servico_id=serv_id
+                    )
+                )
 
         await db.commit()
+
+        # 📤 ENVIAR NOTIFICAÇÃO DE ALTERAÇÃO (Background)
+        data_nova = nova_data.strftime("%d/%m/%Y")
+        hora_nova = nova_hora.strftime("%H:%M")
+
+        from app.services import whatsapp_service
+
+        msg = whatsapp_service.gerar_mensagem_alteracao_agendamento(
+            cliente_nome=cliente_nome,
+            data_antiga=data_antiga,
+            hora_antiga=hora_antiga,
+            data_nova=data_nova,
+            hora_nova=hora_nova,
+            servicos_nomes=servicos_nomes,
+        )
+
+        stmt_cfg = select(Configuracao).limit(1)
+        cfg = (await db.execute(stmt_cfg)).scalars().first()
+        if cfg and cfg.telefone_barbearia:
+            asyncio.create_task(
+                whatsapp_service.enviar_mensagem_automatica(cfg.telefone_barbearia, msg)
+            )
+
+        # 🔄 FILA INTELIGENTE DESATIVADA - BLOCO COMENTADO
+        # fila_service = FilaInteligenteService()
+        # asyncio.create_task(
+        #     fila_service.criar_cascata_horario_vago(
+        #         horario_vago=horario_antigo_datetime,
+        #         cliente_que_libertou_id=cliente_id,
+        #         horario_novo=datetime.combine(nova_data, nova_hora),
+        #     )
+        # )
 
         return RedirectResponse(
             url="/cliente/meus-agendamentos?msg=Agendamento+atualizado+com+sucesso!",
@@ -435,6 +569,7 @@ async def cliente_editar_agendamento_action(
 
     except Exception as e:
         await db.rollback()
+        print(f"ERRO AO EDITAR: {e}")
         return RedirectResponse(
             url=f"/cliente/editar/{agendamento_id}?erro={str(e)}", status_code=303
         )
@@ -444,25 +579,131 @@ async def cliente_editar_agendamento_action(
 async def cliente_cancelar_agendamento(
     agendamento_id: int, request: Request, db: AsyncSession = Depends(get_db)
 ):
-    """Cancela um agendamento do cliente."""
     cliente_id = request.session.get("cliente_id")
     if not cliente_id:
         return RedirectResponse(url="/cliente", status_code=303)
 
-    stmt = select(Agendamento).where(
-        Agendamento.id == agendamento_id, Agendamento.cliente_id == cliente_id
+    stmt = (
+        select(Agendamento)
+        .options(
+            selectinload(Agendamento.cliente),
+            selectinload(Agendamento.barbeiro),
+            selectinload(Agendamento.servicos),
+        )
+        .where(Agendamento.id == agendamento_id, Agendamento.cliente_id == cliente_id)
     )
     res = await db.execute(stmt)
     agendamento = res.scalars().first()
 
     if agendamento and not agendamento.pago:
+        cliente_nome = agendamento.cliente.nome
+        data_str = agendamento.data.strftime("%d/%m/%Y")
+        hora_str = agendamento.hora.strftime("%H:%M")
+        barbeiro_nome = agendamento.barbeiro.nome if agendamento.barbeiro else "Equipe"
+        servicos_nomes = [s.nome for s in agendamento.servicos]
+        horario_vago = datetime.combine(agendamento.data, agendamento.hora)
+
         await db.delete(agendamento)
         await db.commit()
+
+        try:
+            from app.services import whatsapp_service
+
+            msg = whatsapp_service.gerar_mensagem_cancelamento(
+                cliente_nome=cliente_nome,
+                data_str=data_str,
+                hora_str=hora_str,
+                barbeiro_nome=barbeiro_nome,
+                servicos_nomes=servicos_nomes,
+            )
+
+            stmt_cfg = select(Configuracao).limit(1)
+            cfg = (await db.execute(stmt_cfg)).scalars().first()
+            if cfg and cfg.telefone_barbearia:
+                asyncio.create_task(
+                    whatsapp_service.enviar_mensagem_automatica(
+                        cfg.telefone_barbearia, msg
+                    )
+                )
+
+        except Exception as e:
+            print(f"⚠️ Erro ao enviar WhatsApp de cancelamento: {e}")
+
+        # 🔄 FILA INTELIGENTE DESATIVADA - BLOCO COMENTADO
+        # try:
+        #     fila_service = FilaInteligenteService()
+        #     asyncio.create_task(
+        #         fila_service.criar_cascata_horario_vago(
+        #             horario_vago=horario_vago,
+        #             cliente_que_libertou_id=cliente_id,
+        #         )
+        #     )
+        # except Exception as e:
+        #     print(f"⚠️ Erro ao iniciar fila inteligente: {e}")
+
         return RedirectResponse(
             url="/cliente/meus-agendamentos?msg=Agendamento+cancelado+com+sucesso!",
             status_code=303,
         )
 
     return RedirectResponse(
-        url="/cliente/meus-agendamentos?erro=Não+foi+possível+cancelar", status_code=303
+        url="/cliente/meus-agendamentos?erro=Não+foi+possível+cancelar",
+        status_code=303,
     )
+
+
+async def enviar_notificacoes_agendamento(agendamento_id: int):
+    """Envia confirmações para barbearia e cliente após novo agendamento"""
+    try:
+        async with AsyncSessionLocal() as db_temp:
+            stmt = (
+                select(Agendamento)
+                .options(
+                    selectinload(Agendamento.cliente),
+                    selectinload(Agendamento.barbeiro),
+                    selectinload(Agendamento.servicos),
+                )
+                .where(Agendamento.id == agendamento_id)
+            )
+            res = await db_temp.execute(stmt)
+            agd = res.scalars().first()
+            if not agd:
+                return
+
+            stmt_cfg = select(Configuracao).limit(1)
+            cfg = (await db_temp.execute(stmt_cfg)).scalars().first()
+            tel_barbearia = cfg.telefone_barbearia if cfg else None
+
+            servicos_nomes = [s.nome for s in agd.servicos]
+            data_str = agd.data.strftime("%d/%m/%Y")
+            hora_str = agd.hora.strftime("%H:%M")
+
+            if tel_barbearia:
+                from app.services import whatsapp_service
+
+                msg_barb = whatsapp_service.gerar_mensagem_novo_agendamento(
+                    agd.cliente.nome,
+                    servicos_nomes,
+                    data_str,
+                    hora_str,
+                    agd.barbeiro.nome if agd.barbeiro else "Equipe",
+                )
+                await whatsapp_service.enviar_mensagem_automatica(
+                    tel_barbearia, msg_barb
+                )
+
+            from app.services import whatsapp_service
+
+            msg_cliente = whatsapp_service.gerar_mensagem_confirmacao_cliente(
+                agd.cliente.nome.split()[0],
+                data_str,
+                hora_str,
+                agd.barbeiro.nome if agd.barbeiro else "Equipe",
+                servicos_nomes,
+            )
+            await whatsapp_service.enviar_mensagem_automatica(
+                agd.cliente.telefone, msg_cliente
+            )
+
+    except Exception as e:
+        print(f"⚠️ Erro ao enviar notificação de agendamento: {e}")

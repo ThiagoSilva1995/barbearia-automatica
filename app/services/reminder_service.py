@@ -1,11 +1,12 @@
+# app/services/reminder_service.py
 import asyncio
 import httpx
-from datetime import datetime, timedelta, time
+from datetime import datetime, timedelta, time, date
 import pytz
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from app.models import Agendamento, Cliente
+from app.models import Agendamento, Cliente, Configuracao
 from app.services.whatsapp_service import (
     enviar_mensagem_automatica,
     gerar_mensagem_aniversario,
@@ -13,33 +14,59 @@ from app.services.whatsapp_service import (
 
 tz_br = pytz.timezone("America/Sao_Paulo")
 
-# Configurações da API (Devem bater com seu docker-compose)
-API_URL = "http://localhost:8080"
-API_KEY = "sua_chave_secreta_123"
-INSTANCE_NAME = "barbearia"
+# Configurações de horário para aniversários
+HORA_INICIO_ANIVERSARIO = time(8, 0)  # Começa às 08:00
+HORA_FIM_ANIVERSARIO = time(23, 0)  # Termina às 23:00
+HORA_RESET_DIARIO = time(8, 0)  # Reset do flag às 08:00
+
+
+async def _reset_aniversariantes_diario(db: AsyncSession, hoje: date):
+    """
+    Reseta o flag parabens_enviado APENAS para aniversariantes de hoje,
+    uma vez por dia, às 08:00 da manhã.
+    """
+    # Verifica se já executou o reset hoje (usa um cache simples em memória ou tabela auxiliar)
+    # Aqui usamos uma abordagem simples: verifica se há aniversariantes com parabens_enviado=True hoje
+    stmt_check = select(Cliente).where(
+        Cliente.data_nascimento != None,
+        Cliente.parabens_enviado == True,
+        # Filtra apenas quem faz aniversário hoje
+    )
+    result = await db.execute(stmt_check)
+    clientes_com_flag = result.scalars().all()
+
+    aniversariantes_hoje_com_flag = [
+        c
+        for c in clientes_com_flag
+        if c.data_nascimento.day == hoje.day and c.data_nascimento.month == hoje.month
+    ]
+
+    # Se encontrou aniversariantes com flag=True, reseta APENAS eles
+    if aniversariantes_hoje_com_flag:
+        for c in aniversariantes_hoje_com_flag:
+            c.parabens_enviado = False
+        await db.commit()
+        print(
+            f"🔄 Reset diário: {len(aniversariantes_hoje_com_flag)} flags de aniversário resetadas."
+        )
 
 
 async def verificar_e_enviar_aniversariantes(db: AsyncSession):
     """
-    Verifica aniversariantes e envia APENAS UMA VEZ no dia, às 09:00 ou depois.
+    Verifica aniversariantes e envia APENAS UMA VEZ no dia, entre 08:00 e 23:00.
     """
     agora = datetime.now(tz_br)
     hoje = agora.date()
     hora_atual = agora.time()
 
-    HORA_ENVIO = time(9, 0)
-
-    # Se ainda não são 9h, sai da função
-    if hora_atual < HORA_ENVIO:
+    # ✅ Verifica janela de envio: 08:00 às 23:00
+    if hora_atual < HORA_INICIO_ANIVERSARIO or hora_atual >= HORA_FIM_ANIVERSARIO:
         return
 
-    # Reset automático no dia 1º de Janeiro (Opcional, mas recomendado)
-    if hoje.day == 1 and hoje.month == 1:
-        from sqlalchemy import update
-
-        await db.execute(update(Cliente).values(parabens_enviado=False))
-        await db.commit()
-        print("🔄 Campos de aniversário resetados para o novo ano.")
+    # ✅ Reset diário do flag às 08:00 (executa apenas uma vez por dia)
+    if hora_atual.hour == HORA_RESET_DIARIO.hour and hora_atual.minute < 5:
+        await _reset_aniversariantes_diario(db, hoje)
+        return  # Sai após reset para não enviar na mesma execução
 
     # Busca clientes que fazem aniversário hoje E ainda não receberam o parabéns
     stmt = select(Cliente).where(
@@ -48,6 +75,7 @@ async def verificar_e_enviar_aniversariantes(db: AsyncSession):
     result = await db.execute(stmt)
     clientes = result.scalars().all()
 
+    # Filtra apenas aniversariantes de hoje
     aniversariantes_do_dia = [
         c
         for c in clientes
@@ -57,19 +85,31 @@ async def verificar_e_enviar_aniversariantes(db: AsyncSession):
     if not aniversariantes_do_dia:
         return
 
-    print(f"🎂 Encontrados {len(aniversariantes_do_dia)} aniversariantes para hoje.")
+    print(
+        f"🎂 Encontrados {len(aniversariantes_do_dia)} aniversariantes para enviar hoje."
+    )
 
     for cliente in aniversariantes_do_dia:
         try:
+            # Verifica se o telefone está válido
+            if (
+                not cliente.telefone
+                or len(str(cliente.telefone).replace(" ", "").replace("-", "")) < 10
+            ):
+                print(f"⚠️ Telefone inválido para {cliente.nome}, pulando...")
+                continue
+
             msg = gerar_mensagem_aniversario(cliente)
             sucesso = await enviar_mensagem_automatica(cliente.telefone, msg)
 
             if sucesso:
                 print(f"✅ Parabéns enviado para {cliente.nome}")
+                # ✅ Marca como enviado e COMMITA imediatamente
                 cliente.parabens_enviado = True
-                await db.commit()
+                await db.commit()  # Commit EXPLÍCITO para garantir persistência
             else:
                 print(f"❌ Falha ao enviar para {cliente.nome}")
+                await db.rollback()  # Rollback se falhar
         except Exception as e:
             print(f"❌ Erro no processo de {cliente.nome}: {e}")
             await db.rollback()
@@ -94,7 +134,7 @@ async def verificar_e_enviar_lembretes_agendamento(db: AsyncSession):
         )
         .where(
             Agendamento.data.between(hoje, amanha),
-            Agendamento.pago == False,  # Ajuste conforme sua regra
+            Agendamento.pago == False,
             Agendamento.is_confirmed == True,
         )
     )
@@ -147,8 +187,6 @@ async def verificar_e_enviar_lembretes_agendamento(db: AsyncSession):
         # 🔹 ENVIA MENSAGEM SE DENTRO DA JANELA
         if enviar and mensagem:
             try:
-                from app.services.whatsapp_service import enviar_mensagem_automatica
-
                 sucesso = await enviar_mensagem_automatica(
                     agd.cliente.telefone, mensagem
                 )

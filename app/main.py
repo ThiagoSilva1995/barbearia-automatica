@@ -1,8 +1,8 @@
-# app/main.py
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from app.database import engine, Base, AsyncSessionLocal
+from app.routers import fila_manual
 from app.models.configuracao import Configuracao
 from app.routers import (
     auth,
@@ -11,10 +11,13 @@ from app.routers import (
     relatorios,
     cliente_publico,
     admin_config,
-    fila_espera,  # ← NOVO: Router da fila inteligente
+    # fila_espera,  # ← COMENTADO: Router da fila inteligente desativado
 )
 from app.services.reminder_service import loop_de_verificacao
-from app.services.fila_inteligente_service import FilaInteligenteService  # ← NOVO
+
+# from app.services.fila_inteligente_service import FilaInteligenteService  # ← COMENTADO
+from app.atualizar_tabelas import executar_migracoes
+
 import os
 import asyncio
 import logging
@@ -24,42 +27,45 @@ from datetime import datetime
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-    ],
+    handlers=[logging.StreamHandler()],
 )
 
 logger = logging.getLogger(__name__)
 
 
-async def verificar_filas_expiradas_background():
-    """
-    Background task: Verifica filas expiradas a cada 1 minuto
-    """
-    while True:
-        try:
-
-            fila_service = FilaInteligenteService()
-            await fila_service.verificar_expiracoes()
-        except Exception as e:
-            logger.error(f"Erro ao verificar filas expiradas: {e}")
-
-        await asyncio.sleep(60)
+# async def verificar_filas_expiradas_background():  # ← COMENTADO
+#     """
+#     Background task: Verifica filas expiradas a cada 1 minuto
+#     """
+#     while True:
+#         try:
+#             fila_service = FilaInteligenteService()
+#             await fila_service.verificar_expiracoes()
+#         except Exception as e:
+#             logger.error(f"Erro ao verificar filas expiradas: {e}")
+#         await asyncio.sleep(60)
 
 
 async def lifespan(app: FastAPI):
-    # Criar tabelas no banco
+    # Criar tabelas no banco (tabelas novas)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     print("✅ Banco de dados pronto! (Tabelas verificadas)")
 
+    # Executar migrações para adicionar colunas faltantes em tabelas existentes
+    try:
+        async with AsyncSessionLocal() as db:
+            await executar_migracoes(db)
+    except Exception as e:
+        logger.error(f"⚠️ Erro nas migrações: {e}")
+
     # Inicia o robô de lembretes em segundo plano
     asyncio.create_task(loop_de_verificacao(AsyncSessionLocal))
 
-    # ← NOVO: Inicia verificador de filas expiradas
-    asyncio.create_task(verificar_filas_expiradas_background())
+    # ← COMENTADO: Inicia verificador de filas expiradas
+    # asyncio.create_task(verificar_filas_expiradas_background())
 
-    print("🤖 Robô de Lembretes e Fila Inteligente Iniciado...")
+    print("🤖 Robô de Lembretes Iniciado... (Fila Inteligente desativada)")
 
     yield
 
@@ -83,7 +89,8 @@ app.include_router(cadastros.router)
 app.include_router(relatorios.router)
 app.include_router(cliente_publico.router)
 app.include_router(admin_config.router)
-app.include_router(fila_espera.router)
+app.include_router(fila_manual.router)
+# app.include_router(fila_espera.router)  # ← COMENTADO: Router da fila inteligente
 
 
 if __name__ == "__main__":
