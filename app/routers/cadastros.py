@@ -154,50 +154,76 @@ async def excluir_cliente(
 
 @router.get("/servicos", response_class=HTMLResponse)
 async def listar_servicos(request: Request, db: AsyncSession = Depends(get_db)):
-    """Lista todos os serviços cadastrados"""
-    # Verifica se é admin
     if request.session.get("user_role") != "admin":
         return RedirectResponse(url="/login?erro=Acesso+restrito", status_code=303)
 
     result = await db.execute(select(Servico).order_by(Servico.nome))
+
+    # Verifica se estamos no modo de edição
+    edit_id = request.query_params.get("editar")
+    servico_editando = None
+    if edit_id:
+        stmt = select(Servico).where(Servico.id == int(edit_id))
+        res = await db.execute(stmt)
+        servico_editando = res.scalars().first()
+
     return templates.TemplateResponse(
         "administrador/servicos.html",
         {
             "request": request,
             "servicos": result.scalars().all(),
             "msg": request.query_params.get("msg"),
+            "erro": request.query_params.get("erro"),
+            "servico_editando": servico_editando,
         },
     )
 
 
 @router.post("/servicos")
-async def criar_servico(request: Request, db: AsyncSession = Depends(get_db)):
-    """Cria um novo serviço com duração estimada"""
+async def criar_ou_editar_servico(request: Request, db: AsyncSession = Depends(get_db)):
     if request.session.get("user_role") != "admin":
         return RedirectResponse(url="/login?erro=Acesso+negado", status_code=303)
 
     form_data = await request.form()
+    servico_id = form_data.get("servico_id")  # ← Se existir, é edição
+
     try:
         nome_formatado = format_name(form_data["nome"])
         preco = Decimal(str(form_data["preco"]).replace(",", "."))
-
-        # ✅ Captura duração minutos (padrão 30 se não enviado)
         duracao_str = form_data.get("duracao_minutos", "30")
         duracao_minutos = int(duracao_str) if duracao_str.isdigit() else 30
 
-        # Verifica duplicidade
-        stmt_check = select(Servico).where(Servico.nome.ilike(nome_formatado))
-        if (await db.execute(stmt_check)).scalars().first():
-            return RedirectResponse(
-                url="/servicos?erro=Serviço+já+cadastrado", status_code=303
-            )
+        if servico_id:
+            # ✏️ ATUALIZAR SERVIÇO EXISTENTE
+            stmt = select(Servico).where(Servico.id == int(servico_id))
+            res = await db.execute(stmt)
+            servico = res.scalars().first()
+            if servico:
+                servico.nome = nome_formatado
+                servico.preco = preco
+                servico.duracao_minutos = duracao_minutos
+                msg = "Serviço+atualizado+com+sucesso!"
+            else:
+                return RedirectResponse(
+                    url="/servicos?erro=Serviço+não+encontrado", status_code=303
+                )
+        else:
+            # ➕ CRIAR NOVO SERVIÇO
+            stmt_check = select(Servico).where(Servico.nome.ilike(nome_formatado))
+            if (await db.execute(stmt_check)).scalars().first():
+                return RedirectResponse(
+                    url="/servicos?erro=Serviço+já+cadastrado", status_code=303
+                )
 
-        # ✅ Salva o serviço com a nova duração
-        db.add(
-            Servico(nome=nome_formatado, preco=preco, duracao_minutos=duracao_minutos)
-        )
+            db.add(
+                Servico(
+                    nome=nome_formatado, preco=preco, duracao_minutos=duracao_minutos
+                )
+            )
+            msg = "Serviço+cadastrado+com+sucesso!"
+
         await db.commit()
-        return RedirectResponse(url="/servicos?msg=sucesso", status_code=303)
+        return RedirectResponse(url=f"/servicos?msg={msg}", status_code=303)
     except Exception as e:
         await db.rollback()
         return RedirectResponse(url=f"/servicos?erro={str(e)}", status_code=303)

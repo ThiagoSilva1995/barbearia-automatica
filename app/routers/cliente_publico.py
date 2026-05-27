@@ -124,7 +124,7 @@ async def area_cliente_acessar(request: Request, db: AsyncSession = Depends(get_
     if cliente:
         request.session["cliente_id"] = cliente.id
         request.session["cliente_nome"] = cliente.nome
-        return RedirectResponse(url="/cliente/agendar", status_code=303)
+        return RedirectResponse(url="/cliente/meus-agendamentos", status_code=303)
     else:
         return templates.TemplateResponse(
             "cliente/cadastro.html", {"request": request, "telefone": telefone}

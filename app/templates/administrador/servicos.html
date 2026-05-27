@@ -1,11 +1,10 @@
 {% extends "base.html" %}
-
 {% block title %}Serviços - Gestão de Barbearia{% endblock %}
 
 {% block content %}
 <div class="max-w-6xl mx-auto">
     <div class="flex justify-between items-center mb-6">
-        <h1 class="text-3xl font-bold text-gray-800">️ Gestão de Serviços</h1>
+        <h1 class="text-3xl font-bold text-gray-800">✂️ Gestão de Serviços</h1>
         {% if request.session.get('is_admin') %}
         <a href="/home" class="text-gray-600 hover:text-gray-900 underline">Voltar ao Painel</a>
         {% else %}
@@ -14,37 +13,53 @@
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-        <!-- Coluna 1: Formulário de Cadastro -->
+        <!-- Coluna 1: Formulário de Cadastro/Edição -->
         <div class="lg:col-span-1">
             <div class="bg-white p-6 rounded-lg shadow-md sticky top-24">
-                <h2 class="text-xl font-bold text-gray-800 mb-4 border-b pb-2">Novo Serviço</h2>
+                <h2 class="text-xl font-bold text-gray-800 mb-4 border-b pb-2">
+                    {% if servico_editando %}✏️ Editar Serviço{% else %}➕ Novo Serviço{% endif %}
+                </h2>
                 <form action="/servicos" method="POST" class="space-y-4">
+                    <!-- Campo oculto para identificar edição -->
+                    {% if servico_editando %}
+                    <input type="hidden" name="servico_id" value="{{ servico_editando.id }}">
+                    {% endif %}
+
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Nome do Serviço</label>
                         <input type="text" name="nome" required placeholder="Ex: Corte Social, Barba..."
+                            value="{{ servico_editando.nome if servico_editando else '' }}"
                             class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
                     </div>
 
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">Preço (R$)</label>
                         <input type="number" step="0.01" name="preco" required placeholder="0.00"
+                            value="{{ servico_editando.preco if servico_editando else '' }}"
                             class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
                     </div>
 
-                    <!-- ✅ NOVO CAMPO: Duração -->
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-1">⏱️ Duração Estimada
                             (minutos)</label>
                         <input type="number" name="duracao_minutos" min="15" max="180" step="5" value="30" required
+                            value="{{ servico_editando.duracao_minutos if servico_editando else '30' }}"
                             class="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
                         <p class="text-xs text-gray-500 mt-1">Tempo que o barbeiro levará para executar.</p>
                     </div>
 
-                    <button type="submit"
-                        class="w-full bg-blue-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-700 transition shadow-md">
-                        <i class="fas fa-plus-circle mr-2"></i> Cadastrar Serviço
-                    </button>
+                    <div class="flex gap-2">
+                        <button type="submit"
+                            class="flex-1 bg-blue-600 text-white font-bold py-2 px-4 rounded-lg hover:bg-blue-700 transition shadow-md">
+                            {% if servico_editando %}💾 Salvar Alterações{% else %}✅ Cadastrar Serviço{% endif %}
+                        </button>
+                        {% if servico_editando %}
+                        <a href="/servicos"
+                            class="flex-1 bg-gray-200 text-gray-700 font-bold py-2 px-4 rounded-lg hover:bg-gray-300 transition text-center">
+                            ❌ Cancelar
+                        </a>
+                        {% endif %}
+                    </div>
                 </form>
             </div>
         </div>
@@ -85,15 +100,20 @@
                                 <td class="px-6 py-4 whitespace-nowrap">
                                     <div class="text-sm font-bold text-gray-900">R$ {{ "%.2f"|format(s.preco) }}</div>
                                 </td>
-                                <!-- ✅ NOVA COLUNA: Exibe a duração -->
                                 <td class="px-6 py-4 whitespace-nowrap">
                                     <div class="text-sm text-gray-600 font-medium">{{ s.duracao_minutos or 30 }} min
                                     </div>
                                 </td>
-                                <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                                <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-2">
+                                    <!-- ✅ BOTÃO EDITAR -->
+                                    <a href="?editar={{ s.id }}" class="text-blue-600 hover:text-blue-800"
+                                        title="Editar">
+                                        <i class="fas fa-edit"></i> Editar
+                                    </a>
+                                    <!-- BOTÃO EXCLUIR -->
                                     <a href="/excluir-servico/{{ s.id }}"
-                                        onclick="return confirm('Tem certeza que deseja excluir o serviço {{ s.nome }}?')"
-                                        class="text-red-600 hover:text-red-900 ml-3" title="Excluir">
+                                        onclick="return confirm('Tem certeza que deseja excluir {{ s.nome }}?')"
+                                        class="text-red-600 hover:text-red-800" title="Excluir">
                                         <i class="fas fa-trash-alt"></i>
                                     </a>
                                 </td>
@@ -104,7 +124,6 @@
                                 <td colspan="4" class="px-6 py-10 text-center text-gray-500">
                                     <i class="fas fa-cut text-4xl mb-3 text-gray-300"></i>
                                     <p>Nenhum serviço cadastrado ainda.</p>
-                                    <p class="text-xs mt-1">Cadastre os cortes e barbas disponíveis na barbearia.</p>
                                 </td>
                             </tr>
                             {% endif %}

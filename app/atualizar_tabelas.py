@@ -50,22 +50,37 @@ async def atualizar_tabela_agendamentos(db: AsyncSession):
 
 
 async def atualizar_tabela_servicos(db: AsyncSession):
+    """
+    Adiciona TODAS as colunas novas na tabela servicos:
+    - descricao: Texto descritivo do serviço
+    - ativo: Flag para ativar/desativar serviço
+    - duracao_minutos: Duração estimada para cálculo de agenda
+    """
     try:
-        sql = text(
-            "ALTER TABLE servicos ADD COLUMN IF NOT EXISTS duracao_minutos INTEGER DEFAULT 30"
-        )
+        # ✅ Adiciona as 3 colunas de uma vez com IF NOT EXISTS
+        sql = text("""
+            ALTER TABLE servicos 
+            ADD COLUMN IF NOT EXISTS descricao TEXT,
+            ADD COLUMN IF NOT EXISTS ativo BOOLEAN DEFAULT TRUE,
+            ADD COLUMN IF NOT EXISTS duracao_minutos INTEGER DEFAULT 30
+        """)
         await db.execute(sql)
         await db.commit()
-        logger.info("✅ Tabela 'servicos' atualizada")
+        logger.info(
+            "✅ Tabela 'servicos' atualizada com: descricao, ativo, duracao_minutos"
+        )
     except Exception as e:
-        logger.error(f"❌ Erro em servicos: {e}")
+        logger.error(f"❌ Erro ao atualizar servicos: {e}")
         await db.rollback()
         raise
 
 
 async def executar_migracoes(db: AsyncSession):
-    logger.info("🔄 Iniciando migrações...")
+    """Função principal que executa todas as migrações em sequência."""
+    logger.info("🔄 Iniciando migrações do banco de dados...")
+
     await atualizar_tabela_configuracoes(db)
     await atualizar_tabela_agendamentos(db)
-    await atualizar_tabela_servicos(db)
-    logger.info("✅ Migrações concluídas!")
+    await atualizar_tabela_servicos(db)  # ← Agora adiciona todas as colunas
+
+    logger.info("✅ Todas as migrações concluídas!")
