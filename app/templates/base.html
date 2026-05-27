@@ -115,6 +115,7 @@
                         title="Produtos">
                         <i class="fas fa-box"></i>
                     </a>
+                    <!-- ✅ DESKTOP: Mantido link original para Configurações -->
                     <a href="/admin/configuracoes"
                         class="px-3 py-2 rounded-full text-sm font-medium hover:bg-white hover:text-blue-600 hover:shadow-sm transition text-slate-600"
                         title="Configurações">
@@ -214,15 +215,33 @@
                 <span class="text-[9px] font-medium">Barbeiros</span>
             </a>
 
-            <a href="/admin/configuracoes"
-                class="nav-item flex flex-col items-center justify-center w-full h-full text-slate-400 hover:text-blue-600 transition duration-300 {% if request.url.path == '/admin/configuracoes' %}active{% endif %}">
+            <!-- ✅ MOBILE: Alterado para apontar para /admin/gestao-completa -->
+            <a href="/admin/gestao-completa"
+                class="nav-item flex flex-col items-center justify-center w-full h-full text-slate-400 hover:text-blue-600 transition duration-300 {% if request.url.path == '/admin/gestao-completa' or request.url.path == '/admin/configuracoes' or request.url.path == '/servicos' or request.url.path == '/produtos' %}active{% endif %}">
                 <i class="fas fa-cog text-xl mb-1 transition-transform"></i>
-                <span class="text-[9px] font-medium">Ajustes</span>
+                <span class="text-[9px] font-medium">Gestão</span>
             </a>
             {% endif %}
         </div>
     </div>
     {% endif %}
+
+    <!-- Script para destacar item ativo no mobile -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const currentPath = window.location.pathname;
+            const navItems = document.querySelectorAll('.nav-item');
+
+            navItems.forEach(item => {
+                const href = item.getAttribute('href');
+                if (currentPath === href) {
+                    item.classList.add('active');
+                    item.classList.remove('text-slate-400');
+                    item.classList.add('text-blue-600');
+                }
+            });
+        });
+    </script>
 </body>
 
 </html>
