@@ -116,5 +116,19 @@
     </div>
     {% endif %}
 </div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function () {
+        const btnNovo = document.querySelector('a[href*="agendar"]');
+        if (btnNovo) {
+            console.log('🔗Href do botão Novo:', btnNovo.href);
+            // Força o href correto se estiver errado
+            if (!btnNovo.href.endsWith('/cliente/agendar')) {
+                btnNovo.href = '/cliente/agendar';
+                console.log('✅Href corrigido para /cliente/agendar');
+            }
+        }
+    });
+</script>
 <div class="h-6"></div>
 {% endblock %}
