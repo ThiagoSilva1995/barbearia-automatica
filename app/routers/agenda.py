@@ -2,7 +2,7 @@ from fastapi import APIRouter, Request, Depends, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import datetime, timedelta, date
+from datetime import datetime, time, timedelta, date
 import pytz
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -30,49 +30,79 @@ templates = Jinja2Templates(directory="app/templates")
 tz_br = pytz.timezone("America/Sao_Paulo")
 
 
-def gerar_horarios_disponiveis(config: Configuracao, data_alvo: date):
+def calcular_horario_fim(hora_inicio: time, duracao_min: int) -> str:
+    """Calcula horário de término baseado na duração"""
+    if not duracao_min:
+        duracao_min = 30
+
+    dt_inicio = datetime.combine(date.today(), hora_inicio)
+    dt_fim = dt_inicio + timedelta(minutes=duracao_min)
+    return dt_fim.strftime("%H:%M")
+
+
+def gerar_horarios_disponiveis(
+    config: Configuracao,
+    data_alvo: date,
+    duracao_servico: int = 30,
+    buffer_minutos: int = 10,
+):
     """
-    Gera horários válidos considerando dia da semana, horário atual e regra de sábado.
+    Gera horários válidos considerando duração do serviço + buffer.
     """
     hoje = datetime.now(tz_br).date()
     agora = datetime.now(tz_br)
-    dia_semana = data_alvo.weekday()  # 0=Seg, 5=Sáb, 6=Dom
+    dia_semana = data_alvo.weekday()
 
-    # Domingo: Barbearia fechada
-    if dia_semana == 6:
+    if dia_semana == 6:  # Domingo
         return []
 
     horarios = []
-    intervalo = config.intervalo_minutos if config and config.intervalo_minutos else 30
+    data_base = hoje
 
     try:
-        inicio_m = datetime.strptime(config.horario_inicio_manha or "08:30", "%H:%M")
-        fim_m = datetime.strptime(config.horario_fim_manha or "11:00", "%H:%M")
-        inicio_t = datetime.strptime(config.horario_inicio_tarde or "14:00", "%H:%M")
-        fim_t = datetime.strptime(config.horario_fim_tarde or "18:30", "%H:%M")
+        inicio_m = datetime.combine(
+            data_base,
+            datetime.strptime(config.horario_inicio_manha or "08:30", "%H:%M").time(),
+        )
+        fim_m = datetime.combine(
+            data_base,
+            datetime.strptime(config.horario_fim_manha or "11:00", "%H:%M").time(),
+        )
+        inicio_t = datetime.combine(
+            data_base,
+            datetime.strptime(config.horario_inicio_tarde or "14:00", "%H:%M").time(),
+        )
+        fim_t = datetime.combine(
+            data_base,
+            datetime.strptime(config.horario_fim_tarde or "18:30", "%H:%M").time(),
+        )
     except Exception:
-        inicio_m, fim_m = datetime(1, 1, 1, 8, 30), datetime(1, 1, 1, 11, 0)
-        inicio_t, fim_t = datetime(1, 1, 1, 14, 0), datetime(1, 1, 1, 18, 30)
+        inicio_m = datetime.combine(data_base, time(8, 30))
+        fim_m = datetime.combine(data_base, time(11, 0))
+        inicio_t = datetime.combine(data_base, time(14, 0))
+        fim_t = datetime.combine(data_base, time(18, 30))
 
-    # Regra de Sábado: Fecha às 12:00
-    limite_sabado = datetime(1, 1, 1, 12, 0)
+    # Sábado: fecha às 12:00
     if dia_semana == 5:
+        limite_sabado = datetime.combine(data_base, time(12, 0))
         if fim_m > limite_sabado:
             fim_m = limite_sabado
-        inicio_t = limite_sabado
-        fim_t = limite_sabado
+        inicio_t = datetime.combine(data_base, time(23, 0))
+        fim_t = datetime.combine(data_base, time(22, 0))
 
-    def _adicionar(inicio, fim):
+    def _adicionar_horarios_dinamicos(inicio, fim, duracao_necessaria):
         atual = inicio
-        while atual <= fim:
+        tempo_total = duracao_necessaria + buffer_minutos
+        while atual + timedelta(minutes=tempo_total) <= fim:
             horarios.append(atual.strftime("%H:%M"))
-            atual += timedelta(minutes=intervalo)
+            atual += timedelta(minutes=tempo_total)
 
-    _adicionar(inicio_m, fim_m)
+    if inicio_m <= fim_m:
+        _adicionar_horarios_dinamicos(inicio_m, fim_m, duracao_servico)
     if inicio_t < fim_t:
-        _adicionar(inicio_t, fim_t)
+        _adicionar_horarios_dinamicos(inicio_t, fim_t, duracao_servico)
 
-    # Filtro para HOJE
+    # Filtro para hoje
     if data_alvo == hoje:
         hora_atual_str = agora.strftime("%H:%M")
         horarios = [h for h in horarios if h > hora_atual_str]
@@ -117,8 +147,10 @@ async def listar_agendamentos(request: Request, db: AsyncSession = Depends(get_d
     result = await db.execute(query)
     agendamentos = result.scalars().all()
 
+    # ✅ CALCULAR HORÁRIO DE INÍCIO E FIM PARA CADA AGENDAMENTO
     for agd in agendamentos:
-        agd.hora_str = agd.hora.strftime("%H:%M")
+        agd.hora_inicio_str = agd.hora.strftime("%H:%M")
+        agd.hora_fim_str = calcular_horario_fim(agd.hora, agd.duracao_minutos or 30)
         agd.data_str = agd.data.strftime("%d/%m")
 
     barbeiros_res = await db.execute(select(Barbeiro).order_by(Barbeiro.nome))
