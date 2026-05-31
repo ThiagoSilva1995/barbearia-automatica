@@ -25,6 +25,9 @@ from app.services.agendamento_service import (
     confirmar_pagamento_e_baixar_estoque,
 )
 
+# Importando a nova lógica inteligente
+from app.utils.horarios import gerar_slots_disponiveis, filtrar_conflitos
+
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
 tz_br = pytz.timezone("America/Sao_Paulo")
@@ -38,76 +41,6 @@ def calcular_horario_fim(hora_inicio: time, duracao_min: int) -> str:
     dt_inicio = datetime.combine(date.today(), hora_inicio)
     dt_fim = dt_inicio + timedelta(minutes=duracao_min)
     return dt_fim.strftime("%H:%M")
-
-
-def gerar_horarios_disponiveis(
-    config: Configuracao,
-    data_alvo: date,
-    duracao_servico: int = 30,
-    buffer_minutos: int = 10,
-):
-    """
-    Gera horários válidos considerando duração do serviço + buffer.
-    """
-    hoje = datetime.now(tz_br).date()
-    agora = datetime.now(tz_br)
-    dia_semana = data_alvo.weekday()
-
-    if dia_semana == 6:  # Domingo
-        return []
-
-    horarios = []
-    data_base = hoje
-
-    try:
-        inicio_m = datetime.combine(
-            data_base,
-            datetime.strptime(config.horario_inicio_manha or "08:30", "%H:%M").time(),
-        )
-        fim_m = datetime.combine(
-            data_base,
-            datetime.strptime(config.horario_fim_manha or "11:00", "%H:%M").time(),
-        )
-        inicio_t = datetime.combine(
-            data_base,
-            datetime.strptime(config.horario_inicio_tarde or "14:00", "%H:%M").time(),
-        )
-        fim_t = datetime.combine(
-            data_base,
-            datetime.strptime(config.horario_fim_tarde or "18:30", "%H:%M").time(),
-        )
-    except Exception:
-        inicio_m = datetime.combine(data_base, time(8, 30))
-        fim_m = datetime.combine(data_base, time(11, 0))
-        inicio_t = datetime.combine(data_base, time(14, 0))
-        fim_t = datetime.combine(data_base, time(18, 30))
-
-    # Sábado: fecha às 12:00
-    if dia_semana == 5:
-        limite_sabado = datetime.combine(data_base, time(12, 0))
-        if fim_m > limite_sabado:
-            fim_m = limite_sabado
-        inicio_t = datetime.combine(data_base, time(23, 0))
-        fim_t = datetime.combine(data_base, time(22, 0))
-
-    def _adicionar_horarios_dinamicos(inicio, fim, duracao_necessaria):
-        atual = inicio
-        tempo_total = duracao_necessaria + buffer_minutos
-        while atual + timedelta(minutes=tempo_total) <= fim:
-            horarios.append(atual.strftime("%H:%M"))
-            atual += timedelta(minutes=tempo_total)
-
-    if inicio_m <= fim_m:
-        _adicionar_horarios_dinamicos(inicio_m, fim_m, duracao_servico)
-    if inicio_t < fim_t:
-        _adicionar_horarios_dinamicos(inicio_t, fim_t, duracao_servico)
-
-    # Filtro para hoje
-    if data_alvo == hoje:
-        hora_atual_str = agora.strftime("%H:%M")
-        horarios = [h for h in horarios if h > hora_atual_str]
-
-    return horarios
 
 
 @router.get("/agendamentos", response_class=HTMLResponse)
@@ -209,7 +142,18 @@ async def marcar_horario_form(request: Request, db: AsyncSession = Depends(get_d
     hoje = datetime.now(tz_br).date()
 
     # ✅ Usa função inteligente (já retorna [] para domingos)
-    horarios = gerar_horarios_disponiveis(config, hoje)
+    # Para admin, podemos assumir um serviço padrão de 30min ou deixar dinâmico se quiser
+    horarios = gerar_slots_disponiveis(config, hoje, passo_minutos=10)
+
+    # Como é tela de admin, vamos filtrar conflitos com um serviço padrão de 30min
+    # Se quiser filtrar por serviço específico, precisaria passar o ID do serviço na URL
+    stmt_ocupados = select(Agendamento.hora, Agendamento.duracao_minutos).where(
+        Agendamento.data == hoje
+    )
+    ocupados_res = await db.execute(stmt_ocupados)
+    ocupados = ocupados_res.all()
+
+    horarios_livres = filtrar_conflitos(horarios, ocupados, duracao_necessaria=30, buffer=10)
 
     clientes_res = await db.execute(select(Cliente).order_by(Cliente.nome))
     barbeiros_res = await db.execute(select(Barbeiro).order_by(Barbeiro.nome))
@@ -219,16 +163,14 @@ async def marcar_horario_form(request: Request, db: AsyncSession = Depends(get_d
         "marcar_horario.html",
         {
             "request": request,
-            "horarios_disponiveis": horarios,
+            "horarios_disponiveis": horarios_livres,  # Usando a lista filtrada
             "clientes": clientes_res.scalars().all(),
             "barbeiros": barbeiros_res.scalars().all(),
             "servicos": servicos_res.scalars().all(),
             "data_inicial": hoje.strftime("%Y-%m-%d"),
             "erro": None,
             "msg_domingo": (
-                "⛔ A barbearia não funciona aos domingos."
-                if hoje.weekday() == 6
-                else None
+                "⛔ A barbearia não funciona aos domingos." if hoje.weekday() == 6 else None
             ),
         },
     )
@@ -428,7 +370,25 @@ async def editar_agendamento_form(
     config = res_config.scalars().first()
 
     # ✅ Usa função inteligente
-    horarios = gerar_horarios_disponiveis(config, agd.data)
+    # Calcula duração atual do agendamento
+    duracao_atual = agd.duracao_minutos or 30
+
+    # 1. Gera slots
+    slots_gerados = gerar_slots_disponiveis(config, agd.data, passo_minutos=10)
+
+    # 2. Busca ocupados (excluindo o próprio)
+    stmt_ocupados = select(Agendamento.hora, Agendamento.duracao_minutos).where(
+        Agendamento.data == agd.data,
+        Agendamento.barbeiro_id == agd.barbeiro_id,
+        Agendamento.id != agendamento_id,
+    )
+    ocupados_res = await db.execute(stmt_ocupados)
+    ocupados = ocupados_res.all()
+
+    # 3. Filtra
+    horarios_livres = filtrar_conflitos(
+        slots_gerados, ocupados, duracao_necessaria=duracao_atual, buffer=10
+    )
 
     clientes_res = await db.execute(select(Cliente).order_by(Cliente.nome))
     barbeiros_res = await db.execute(select(Barbeiro).order_by(Barbeiro.nome))
@@ -444,7 +404,7 @@ async def editar_agendamento_form(
             "barbeiros": barbeiros_res.scalars().all(),
             "servicos": servicos_res.scalars().all(),
             "servicos_atuais_ids": servicos_atuais_ids,
-            "horarios_disponiveis": horarios,
+            "horarios_disponiveis": horarios_livres,
             "erro": None,
         },
     )
