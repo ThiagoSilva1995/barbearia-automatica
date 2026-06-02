@@ -91,6 +91,7 @@ async def area_cliente_agendar(request: Request, db: AsyncSession = Depends(get_
     cliente_atual = (
         (await db.execute(select(Cliente).where(Cliente.id == cliente_id))).scalars().first()
     )
+    # ✅ Ordem Alfabética Garantida
     barbeiros = (await db.execute(select(Barbeiro).order_by(Barbeiro.nome))).scalars().all()
     servicos = (await db.execute(select(Servico).order_by(Servico.nome))).scalars().all()
 
@@ -114,8 +115,8 @@ async def area_cliente_agendar(request: Request, db: AsyncSession = Depends(get_
         except Exception:
             pass
 
-    # 1. Gera TODOS os slots possíveis (passo de 10min) usando a nova função
-    slots_gerados = gerar_slots_disponiveis(config, data_selecionada, passo_minutos=10)
+    # 1. Gera TODOS os slots possíveis (passo de 10min) usando a nova função COM DB
+    slots_gerados = await gerar_slots_disponiveis(db, config, data_selecionada, passo_minutos=10)
 
     # 2. Busca ocupações do banco
     stmt_ocupados = select(Agendamento.hora, Agendamento.duracao_minutos).where(
@@ -267,14 +268,15 @@ async def cliente_editar_agendamento(
     stmt_config = select(Configuracao).limit(1)
     config = (await db.execute(stmt_config)).scalars().first()
 
+    # ✅ Ordem Alfabética Garantida
     barbeiros = (await db.execute(select(Barbeiro).order_by(Barbeiro.nome))).scalars().all()
     servicos = (await db.execute(select(Servico).order_by(Servico.nome))).scalars().all()
 
-    # ✅ Usa a nova lógica inteligente para edição também
+    # ✅ Usa a nova lógica inteligente para edição também (PASSANDO DB)
     duracao_atual = agendamento.duracao_minutos or 30
 
-    # 1. Gera slots
-    slots_gerados = gerar_slots_disponiveis(config, agendamento.data, passo_minutos=10)
+    # 1. Gera slots (CORREÇÃO: Passando 'db' como primeiro argumento)
+    slots_gerados = await gerar_slots_disponiveis(db, config, agendamento.data, passo_minutos=10)
 
     # 2. Busca ocupados (excluindo o próprio agendamento sendo editado)
     stmt_ocupados = select(Agendamento.hora, Agendamento.duracao_minutos).where(
@@ -545,3 +547,10 @@ async def enviar_notificacoes_agendamento(agendamento_id: int):
 
     except Exception as e:
         print(f"⚠️ Erro ao enviar notificação de agendamento: {e}")
+
+
+@router.get("/cliente/sair")
+async def cliente_logout(request: Request):
+    request.session.pop("cliente_id", None)
+    request.session.pop("cliente_nome", None)
+    return RedirectResponse(url="/cliente", status_code=303)

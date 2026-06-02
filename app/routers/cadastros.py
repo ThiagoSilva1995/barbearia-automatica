@@ -36,9 +36,7 @@ async def cadastrar_cliente_form(request: Request, db: AsyncSession = Depends(ge
 
 
 @router.post("/cadastrar-cliente")
-async def cadastrar_cliente_action(
-    request: Request, db: AsyncSession = Depends(get_db)
-):
+async def cadastrar_cliente_action(request: Request, db: AsyncSession = Depends(get_db)):
     form_data = await request.form()
     cliente_id = form_data.get("cliente_id")
     try:
@@ -61,17 +59,14 @@ async def cadastrar_cliente_action(
                 form_data["telefone"],
                 datetime.strptime(form_data["data_nascimento"], "%Y-%m-%d").date(),
             )
-            return RedirectResponse(
-                url="/cadastrar-cliente?msg=sucesso", status_code=303
-            )
+            return RedirectResponse(url="/cadastrar-cliente?msg=sucesso", status_code=303)
     except Exception as e:
-        return RedirectResponse(
-            url=f"/cadastrar-cliente?erro={str(e)}", status_code=303
-        )
+        return RedirectResponse(url=f"/cadastrar-cliente?erro={str(e)}", status_code=303)
 
 
 @router.get("/lista-clientes", response_class=HTMLResponse)
 async def listar_clientes(request: Request, db: AsyncSession = Depends(get_db)):
+    order.by = request.query_params.get("order_by", "nome")
     clientes_com_visitas = await admin_service.get_clientes_com_visitas(db)
     return templates.TemplateResponse(
         "clientes/lista_clientes.html",
@@ -92,9 +87,7 @@ async def editar_cliente_form(
     result = await db.execute(stmt)
     cliente = result.scalars().first()
     if not cliente:
-        return RedirectResponse(
-            url="/lista-clientes?erro=Cliente+não+encontrado", status_code=303
-        )
+        return RedirectResponse(url="/lista-clientes?erro=Cliente+não+encontrado", status_code=303)
     return templates.TemplateResponse(
         "clientes/editar_cliente.html",
         {
@@ -122,15 +115,11 @@ async def editar_cliente_action(
             url="/cadastrar-cliente?msg=Cliente+atualizado+com+sucesso", status_code=303
         )
     except Exception as e:
-        return RedirectResponse(
-            url=f"/editar-cliente/{cliente_id}?erro={str(e)}", status_code=303
-        )
+        return RedirectResponse(url=f"/editar-cliente/{cliente_id}?erro={str(e)}", status_code=303)
 
 
 @router.get("/excluir-cliente/{cliente_id}")
-async def excluir_cliente(
-    cliente_id: int, request: Request, db: AsyncSession = Depends(get_db)
-):
+async def excluir_cliente(cliente_id: int, request: Request, db: AsyncSession = Depends(get_db)):
     try:
         await admin_service.excluir_cliente(db, cliente_id)
         return RedirectResponse(
@@ -142,9 +131,7 @@ async def excluir_cliente(
                 url="/cadastrar-cliente?erro=Cliente+possui+agendamentos+vinculados",
                 status_code=303,
             )
-        return RedirectResponse(
-            url=f"/cadastrar-cliente?erro={str(e)}", status_code=303
-        )
+        return RedirectResponse(url=f"/cadastrar-cliente?erro={str(e)}", status_code=303)
 
 
 # =============================================================================
@@ -211,15 +198,9 @@ async def criar_ou_editar_servico(request: Request, db: AsyncSession = Depends(g
             # ➕ CRIAR NOVO SERVIÇO
             stmt_check = select(Servico).where(Servico.nome.ilike(nome_formatado))
             if (await db.execute(stmt_check)).scalars().first():
-                return RedirectResponse(
-                    url="/servicos?erro=Serviço+já+cadastrado", status_code=303
-                )
+                return RedirectResponse(url="/servicos?erro=Serviço+já+cadastrado", status_code=303)
 
-            db.add(
-                Servico(
-                    nome=nome_formatado, preco=preco, duracao_minutos=duracao_minutos
-                )
-            )
+            db.add(Servico(nome=nome_formatado, preco=preco, duracao_minutos=duracao_minutos))
             msg = "Serviço+cadastrado+com+sucesso!"
 
         await db.commit()
@@ -230,9 +211,7 @@ async def criar_ou_editar_servico(request: Request, db: AsyncSession = Depends(g
 
 
 @router.get("/excluir-servico/{servico_id}")
-async def excluir_servico(
-    servico_id: int, request: Request, db: AsyncSession = Depends(get_db)
-):
+async def excluir_servico(servico_id: int, request: Request, db: AsyncSession = Depends(get_db)):
     """Exclui um serviço"""
     if request.session.get("user_role") != "admin":
         return RedirectResponse(url="/login?erro=Acesso+negado", status_code=303)
@@ -248,9 +227,7 @@ async def excluir_servico(
         return RedirectResponse(url="/servicos?erro=Não+encontrado", status_code=303)
     except Exception as e:
         if "foreign key" in str(e).lower():
-            return RedirectResponse(
-                url="/servicos?erro=Em+uso+em+agendamentos", status_code=303
-            )
+            return RedirectResponse(url="/servicos?erro=Em+uso+em+agendamentos", status_code=303)
         return RedirectResponse(url=f"/servicos?erro={str(e)}", status_code=303)
 
 
@@ -288,9 +265,7 @@ async def criar_produto(request: Request, db: AsyncSession = Depends(get_db)):
 
         stmt_check = select(Produto).where(Produto.nome.ilike(nome_formatado))
         if (await db.execute(stmt_check)).scalars().first():
-            return RedirectResponse(
-                url="/produtos?erro=Produto+já+cadastrado", status_code=303
-            )
+            return RedirectResponse(url="/produtos?erro=Produto+já+cadastrado", status_code=303)
 
         db.add(Produto(nome=nome_formatado, preco=preco, estoque=estoque))
         await db.commit()
@@ -301,9 +276,7 @@ async def criar_produto(request: Request, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/excluir-produto/{produto_id}")
-async def excluir_produto(
-    produto_id: int, request: Request, db: AsyncSession = Depends(get_db)
-):
+async def excluir_produto(produto_id: int, request: Request, db: AsyncSession = Depends(get_db)):
     if request.session.get("user_role") != "admin":
         return RedirectResponse(url="/login?erro=Acesso+negado", status_code=303)
 
@@ -383,15 +356,11 @@ async def salvar_barbeiro(request: Request, db: AsyncSession = Depends(get_db)):
         )
     except Exception as e:
         await db.rollback()
-        return RedirectResponse(
-            url=f"/cadastrar-barbeiro?erro={str(e)}", status_code=303
-        )
+        return RedirectResponse(url=f"/cadastrar-barbeiro?erro={str(e)}", status_code=303)
 
 
 @router.get("/remover-barbeiro/{barbeiro_id}")
-async def remover_barbeiro(
-    barbeiro_id: int, request: Request, db: AsyncSession = Depends(get_db)
-):
+async def remover_barbeiro(barbeiro_id: int, request: Request, db: AsyncSession = Depends(get_db)):
     if request.session.get("user_role") != "admin":
         return RedirectResponse(url="/login?erro=Acesso+negado", status_code=303)
 
@@ -402,10 +371,6 @@ async def remover_barbeiro(
     if barbeiro:
         await db.delete(barbeiro)
         await db.commit()
-        return RedirectResponse(
-            url="/cadastrar-barbeiro?msg=Barbeiro+removido", status_code=303
-        )
+        return RedirectResponse(url="/cadastrar-barbeiro?msg=Barbeiro+removido", status_code=303)
 
-    return RedirectResponse(
-        url="/cadastrar-barbeiro?erro=Não+encontrado", status_code=303
-    )
+    return RedirectResponse(url="/cadastrar-barbeiro?erro=Não+encontrado", status_code=303)

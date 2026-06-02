@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy import delete, insert
 from app.models.servico import agendamento_servico
 
+
 from app.services.whatsapp_service import (
     enviar_parabens_aniversariantes,
     gerar_mensagem_aniversario,
@@ -25,8 +26,11 @@ from app.services.agendamento_service import (
     confirmar_pagamento_e_baixar_estoque,
 )
 
-# Importando a nova lógica inteligente
-from app.utils.horarios import gerar_slots_disponiveis, filtrar_conflitos
+from app.utils.horarios import (
+    gerar_slots_disponiveis,
+    filtrar_conflitos,
+    gerar_slots_admin,
+)
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -129,31 +133,9 @@ async def listar_agendamentos(request: Request, db: AsyncSession = Depends(get_d
 
 @router.get("/marcar-horario", response_class=HTMLResponse)
 async def marcar_horario_form(request: Request, db: AsyncSession = Depends(get_db)):
-    stmt_config = select(Configuracao).limit(1)
-    res_config = await db.execute(stmt_config)
-    config = res_config.scalars().first()
-
-    if not config:
-        config = Configuracao()
-        db.add(config)
-        await db.commit()
-        await db.refresh(config)
-
     hoje = datetime.now(tz_br).date()
 
-    # ✅ Usa função inteligente (já retorna [] para domingos)
-    # Para admin, podemos assumir um serviço padrão de 30min ou deixar dinâmico se quiser
-    horarios = gerar_slots_disponiveis(config, hoje, passo_minutos=10)
-
-    # Como é tela de admin, vamos filtrar conflitos com um serviço padrão de 30min
-    # Se quiser filtrar por serviço específico, precisaria passar o ID do serviço na URL
-    stmt_ocupados = select(Agendamento.hora, Agendamento.duracao_minutos).where(
-        Agendamento.data == hoje
-    )
-    ocupados_res = await db.execute(stmt_ocupados)
-    ocupados = ocupados_res.all()
-
-    horarios_livres = filtrar_conflitos(horarios, ocupados, duracao_necessaria=30, buffer=10)
+    horarios_livres = await gerar_slots_admin(db, hoje, passo_minutos=60)
 
     clientes_res = await db.execute(select(Cliente).order_by(Cliente.nome))
     barbeiros_res = await db.execute(select(Barbeiro).order_by(Barbeiro.nome))
@@ -163,15 +145,13 @@ async def marcar_horario_form(request: Request, db: AsyncSession = Depends(get_d
         "marcar_horario.html",
         {
             "request": request,
-            "horarios_disponiveis": horarios_livres,  # Usando a lista filtrada
+            "horarios_disponiveis": horarios_livres,
             "clientes": clientes_res.scalars().all(),
             "barbeiros": barbeiros_res.scalars().all(),
             "servicos": servicos_res.scalars().all(),
             "data_inicial": hoje.strftime("%Y-%m-%d"),
             "erro": None,
-            "msg_domingo": (
-                "⛔ A barbearia não funciona aos domingos." if hoje.weekday() == 6 else None
-            ),
+            "msg_domingo": None,
         },
     )
 
@@ -186,15 +166,16 @@ async def marcar_horario_action(request: Request, db: AsyncSession = Depends(get
 
         data_escolhida = datetime.strptime(form_data["data"], "%Y-%m-%d").date()
 
-        # Validação Domingo
-        if data_escolhida.weekday() == 6:
-            raise ValueError("A barbearia não funciona aos domingos.")
+        # Prioriza hora manual se preenchida, senão usa o select
+        hora_str = form_data.get("hora_manual") or form_data.get("hora")
+        if not hora_str:
+            raise ValueError("Selecione ou digite um horário.")
 
         dados = AgendamentoCreate(
             cliente_id=int(form_data["cliente"]),
             barbeiro_id=int(form_data["barbeiro"]),
             data=data_escolhida,
-            hora=datetime.strptime(form_data["hora"], "%H:%M").time(),
+            hora=datetime.strptime(hora_str, "%H:%M").time(),
             servico_ids=servico_ids,
         )
         await criar_agendamento(db, dados)
@@ -374,7 +355,7 @@ async def editar_agendamento_form(
     duracao_atual = agd.duracao_minutos or 30
 
     # 1. Gera slots
-    slots_gerados = gerar_slots_disponiveis(config, agd.data, passo_minutos=10)
+    slots_gerados = await gerar_slots_disponiveis(db, config, agd.data, passo_minutos=10)
 
     # 2. Busca ocupados (excluindo o próprio)
     stmt_ocupados = select(Agendamento.hora, Agendamento.duracao_minutos).where(

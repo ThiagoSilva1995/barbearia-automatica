@@ -7,6 +7,8 @@
     <h1 class="text-3xl font-bold text-gray-800 mb-6">📅 Marcar Novo Horário</h1>
 
     <div class="bg-white p-6 rounded-lg shadow-md">
+        <!-- Mensagem de Domingo Removida para Admin -->
+        
         <form action="/marcar-horario" method="POST" class="space-y-4">
 
             <!-- Cliente -->
@@ -21,34 +23,41 @@
                 </select>
             </div>
 
-            <!-- Campo Oculto Fixo para o Dono (ID 1) -->
-            <input type="hidden" name="barbeiro" value="1">
-
-            <!-- Apenas visualização para o usuário -->
+            <!-- Barbeiro (Fixo ou Selecionável) -->
+            <!-- Se quiser que o Admin escolha o barbeiro, descomente o select abaixo e remova o input hidden -->
+            
             <div class="mb-4">
                 <label class="block text-sm font-medium text-gray-700 mb-1">Barbeiro</label>
-                <div class="w-full bg-gray-100 border border-gray-300 rounded-md p-2 text-gray-600">
-                    <i class="fas fa-user-tie mr-2"></i> Dono (Fixo)
-                </div>
-                <p class="text-xs text-gray-500 mt-1">Os agendamentos são feitos exclusivamente com o proprietário.</p>
+                <select name="barbeiro" required class="w-full border-gray-300 rounded-md shadow-sm p-2 border focus:ring-blue-500 focus:border-blue-500">
+                    {% for barb in barbeiros %}
+                        <option value="{{ barb.id }}" {% if loop.first %}selected{% endif %}>{{ barb.nome }}</option>
+                    {% endfor %}
+                </select>
             </div>
+            
 
             <!-- Data e Hora -->
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Data</label>
-                    <input type="date" name="data" value="{{ data_inicial }}" min="{{ data_inicial }}" required
+                    <!-- Admin pode escolher qualquer data, inclusive passada se necessário para correção -->
+                    <input type="date" name="data" value="{{ data_inicial }}" required
                         class="w-full border-gray-300 rounded-md shadow-sm p-2 border focus:ring-blue-500 focus:border-blue-500">
                 </div>
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-1">Hora</label>
                     <select name="hora" required
                         class="w-full border-gray-300 rounded-md shadow-sm p-2 border focus:ring-blue-500 focus:border-blue-500">
-                        <option value="">Selecione um horário...</option>
+                        <option value="">Selecione um horário sugerido...</option>
                         {% for hora in horarios_disponiveis %}
                         <option value="{{ hora }}">{{ hora }}</option>
                         {% endfor %}
                     </select>
+                    <p class="text-xs text-gray-500 mt-1">
+                        * Se o horário desejado não estiver na lista, você pode digitá-lo manualmente no campo de texto abaixo (formato HH:MM).
+                    </p>
+                    <!-- Campo extra para liberdade total -->
+                    <input type="time" name="hora_manual" class="mt-2 w-full border-gray-300 rounded-md shadow-sm p-2 border" placeholder="Ou digite o horário exato">
                 </div>
             </div>
 

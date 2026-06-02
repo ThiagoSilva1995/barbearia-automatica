@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Gestão de Bloqueios{% endblock %}
+
+{% block content %}
+<div class="max-w-4xl mx-auto">
+    <h1 class="text-2xl font-bold mb-6">📅 Gestão de Feriados e Bloqueios</h1>
+
+    <!-- Formulário de Adição -->
+    <div class="bg-white p-6 rounded-lg shadow-md mb-8">
+        <h2 class="text-lg font-semibold mb-4">Adicionar Novo Bloqueio</h2>
+        <form action="/admin/bloqueios/adicionar" method="POST" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Data</label>
+                <input type="date" name="data" required class="mt-1 block w-full border-gray-300 rounded-md shadow-sm">
+            </div>
+
+            <div>
+                <label class="block text-sm font-medium text-gray-700">Tipo de Funcionamento</label>
+                <select name="tipo" id="tipo-bloqueio" onchange="toggleHorarios()" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm">
+                    <option value="FECHADO">Fechado o dia todo</option>
+                    <option value="SO_MANHA">Só Manhã (Padrão)</option>
+                    <option value="SO_TARDE">Só Tarde (Padrão)</option>
+                    <option value="PERSONALIZADO">Horários Personalizados</option>
+                </select>
+            </div>
+
+            <!-- Campos de Horário Personalizado (Ocultos por padrão) -->
+            <div id="campos-personalizados" class="hidden col-span-1 md:col-span-2 grid grid-cols-2 gap-4 bg-gray-50 p-4 rounded">
+                <div><label>Início Manhã</label><input type="time" name="inicio_m" class="w-full"></div>
+                <div><label>Fim Manhã</label><input type="time" name="fim_m" class="w-full"></div>
+                <div><label>Início Tarde</label><input type="time" name="inicio_t" class="w-full"></div>
+                <div><label>Fim Tarde</label><input type="time" name="fim_t" class="w-full"></div>
+            </div>
+
+            <div class="col-span-1 md:col-span-2">
+                <label class="block text-sm font-medium text-gray-700">Motivo (Opcional)</label>
+                <input type="text" name="motivo" placeholder="Ex: Feriado de Natal" class="mt-1 block w-full border-gray-300 rounded-md shadow-sm">
+            </div>
+
+            <div class="col-span-1 md:col-span-2">
+                <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">Salvar Bloqueio</button>
+            </div>
+        </form>
+    </div>
+
+    <!-- Lista de Bloqueios -->
+    <div class="bg-white rounded-lg shadow-md overflow-hidden">
+        <table class="min-w-full divide-y divide-gray-200">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Data</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Tipo</th>
+                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Motivo</th>
+                    <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Ações</th>
+                </tr>
+            </thead>
+            <tbody class="bg-white divide-y divide-gray-200">
+                {% for b in bloqueios %}
+                <tr>
+                    <td class="px-6 py-4 whitespace-nowrap">{{ b.data.strftime('%d/%m/%Y') }}</td>
+                    <td class="px-6 py-4 whitespace-nowrap">
+                        <span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full 
+                            {% if b.tipo == 'FECHADO' %}bg-red-100 text-red-800
+                            {% elif b.tipo == 'SO_MANHA' %}bg-yellow-100 text-yellow-800
+                            {% elif b.tipo == 'SO_TARDE' %}bg-purple-100 text-purple-800
+                            {% else %}bg-blue-100 text-blue-800{% endif %}">
+                            {{ b.tipo }}
+                        </span>
+                    </td>
+                    <td class="px-6 py-4 text-sm text-gray-500">{{ b.motivo or '-' }}</td>
+                    <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                        <a href="/admin/bloqueios/remover/{{ b.id }}" onclick="return confirm('Remover este bloqueio?')" class="text-red-600 hover:text-red-900">Excluir</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<script>
+function toggleHorarios() {
+    const tipo = document.getElementById('tipo-bloqueio').value;
+    const campos = document.getElementById('campos-personalizados');
+    if (tipo === 'PERSONALIZADO') {
+        campos.classList.remove('hidden');
+    } else {
+        campos.classList.add('hidden');
+    }
+}
+</script>
+{% endblock %}

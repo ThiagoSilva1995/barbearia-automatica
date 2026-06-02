@@ -1,38 +1,53 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
-
 <head>
     <meta charset="UTF-8">
-    <!-- Viewport essencial para mobile -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>{% block title %}Barbearia do Thales{% endblock %}</title>
-
-
+    
     <!-- Tailwind e Font Awesome -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
-    <!-- Estilos Customizados -->
     <style>
-        body {
-            background-color: #f8fafc;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        body { 
+            background-color: #f8fafc; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
             -webkit-tap-highlight-color: transparent;
         }
-
-        /* Impede seleção de texto como em apps nativos */
-        body,
-        button,
-        input,
-        select {
-            user-select: none;
-            -webkit-user-select: none;
+        
+        /* Estilos Globais */
+        .glass-header { 
+            background: rgba(255, 255, 255, 0.95); 
+            backdrop-filter: blur(10px); 
+            border-bottom: 1px solid #e2e8f0; 
         }
-
-        .glass-header {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border-bottom: 1px solid #e2e8f0;
+        
+        .btn-primary { 
+            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%); 
+            color: white; 
+            font-weight: 600; 
+            padding: 14px; 
+            border-radius: 12px; 
+            width: 100%; 
+            transition: transform 0.1s; 
+            box-shadow: 0 4px 14px 0 rgba(37, 99, 235, 0.39); 
+        }
+        .btn-primary:active { transform: scale(0.98); }
+        
+        .input-modern { 
+            background: #f1f5f9; 
+            border: 2px solid transparent; 
+            border-radius: 12px; 
+            padding: 12px 16px; 
+            font-size: 16px; 
+            transition: all 0.2s; 
+            width: 100%;
+        }
+        .input-modern:focus { 
+            background: white; 
+            border-color: #2563eb; 
+            outline: none; 
         }
 
         .card-modern {
@@ -42,43 +57,20 @@
             border: none;
         }
 
-        .btn-primary {
-            background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-            color: white;
-            font-weight: 600;
-            padding: 14px;
-            border-radius: 12px;
-            width: 100%;
-            transition: transform 0.1s;
-            box-shadow: 0 4px 14px 0 rgba(37, 99, 235, 0.39);
+        /* Barra de Rolagem Personalizada para Listas (Serviços) */
+        .custom-scroll::-webkit-scrollbar {
+            width: 6px;
         }
-
-        .btn-primary:active {
-            transform: scale(0.98);
+        .custom-scroll::-webkit-scrollbar-track {
+            background: #f1f5f9; 
+            border-radius: 4px;
         }
-
-        .input-modern {
-            background: #f1f5f9;
-            border: 2px solid transparent;
-            border-radius: 12px;
-            padding: 12px 16px;
-            font-size: 16px;
-            transition: all 0.2s;
+        .custom-scroll::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
         }
-
-        .input-modern:focus {
-            background: white;
-            border-color: #2563eb;
-            outline: none;
-        }
-
-        .no-scrollbar::-webkit-scrollbar {
-            display: none;
-        }
-
-        .no-scrollbar {
-            -ms-overflow-style: none;
-            scrollbar-width: none;
+        .custom-scroll::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
         }
     </style>
 </head>
@@ -86,10 +78,9 @@
 <body class="min-h-screen flex flex-col text-slate-800">
 
     <!-- Header Fixo Compacto -->
-    <header class="glass-header sticky top-0 z-50 px-4 py-2.5 flex justify-between items-center shadow-sm">
+    <header class="glass-header sticky top-0 z-50 px-4 py-3 flex justify-between items-center shadow-sm">
         <div class="flex items-center gap-2.5">
-            <div
-                class="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white text-sm font-bold shadow-md flex-shrink-0">
+            <div class="w-8 h-8 bg-blue-600 rounded-full flex items-center justify-center text-white text-sm font-bold shadow-md flex-shrink-0">
                 💈
             </div>
             <div class="leading-tight">
@@ -97,11 +88,25 @@
                 <p class="text-[10px] text-slate-500 font-medium uppercase tracking-wide">Agendamento Online</p>
             </div>
         </div>
-        {% if cliente_logado %}
-        <a href="/cliente/sair"
-            class="w-7 h-7 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-red-50 hover:text-red-500 transition ml-2">
-            <i class="fas fa-sign-out-alt text-xs"></i>
-        </a>
+        
+        <!-- Botões de Ação (Só aparecem se logado) -->
+        {% if request.session.get('cliente_id') %}
+        <div class="flex items-center gap-2">
+            <!-- Nome do Cliente (Opcional, aparece apenas em telas maiores se quiser) -->
+            <span class="hidden sm:block text-xs font-bold text-slate-600 mr-1">
+                Olá, {{ request.session.get('cliente_nome', 'Cliente').split()[0] }}
+            </span>
+
+            <!-- Botão Início (Leva para Meus Agendamentos) -->
+            <a href="/cliente/meus-agendamentos" class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-blue-50 hover:text-blue-600 transition" title="Meus Agendamentos">
+                <i class="fas fa-home text-xs"></i>
+            </a>
+            
+            <!-- Botão Sair -->
+            <a href="/cliente/sair" class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 hover:bg-red-50 hover:text-red-500 transition" title="Sair">
+                <i class="fas fa-sign-out-alt text-xs"></i>
+            </a>
+        </div>
         {% endif %}
     </header>
 
@@ -116,5 +121,4 @@
     </footer>
 
 </body>
-
 </html>
