@@ -8,9 +8,14 @@ services:
     ports:
       - "8000:8000"
     env_file: .env
+    environment:
+      - TZ=America/Sao_Paulo  # ✅ Variável MAIÚSCULA para fuso horário
+      - BASE_URL=${BASE_URL:-http://localhost:8000}
     depends_on:
       - db
       - evolution_api
+    volumes:
+      - /etc/localtime:/etc/localtime:ro  # ✅ Sincroniza hora com o PC Windows/Linux
     networks:
       - barbearia_net
 
@@ -22,8 +27,10 @@ services:
       - POSTGRES_USER=user
       - POSTGRES_PASSWORD=senha123
       - POSTGRES_DB=barbearia_db
+      - TZ=America/Sao_Paulo  # ✅ Banco também no horário de Brasília
     volumes:
       - pg_data:/var/lib/postgresql/data
+      - /etc/localtime:/etc/localtime:ro  # ✅ Sincroniza hora
     networks:
       - barbearia_net
 
@@ -38,8 +45,10 @@ services:
       - DATABASE_PROVIDER=sqlite
       - AUTHENTICATION_API_KEY=iOS8d66fEr6Ou2M8nhJZRz6SKAmOGQkF
       - DISABLE_MANAGER=false
+      - TZ=America/Sao_Paulo  # ✅ Evolution API também no horário de Brasília
     volumes:
       - evolution_data:/store
+      - /etc/localtime:/etc/localtime:ro  # ✅ Sincroniza hora
     networks:
       - barbearia_net
 
