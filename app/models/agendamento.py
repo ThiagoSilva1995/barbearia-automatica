@@ -1,4 +1,3 @@
-# app/models/agendamento.py
 from sqlalchemy import (
     Column,
     Integer,
@@ -25,18 +24,17 @@ class Agendamento(Base):
     pago = Column(Boolean, default=False)
     is_confirmed = Column(Boolean, default=False)
 
-    # ✅ NOVO CAMPO: Duração em minutos (padrão: 30)
-    # Necessário para cálculo de sobreposição de horários
+    # Duração em minutos (padrão: 30)
     duracao_minutos = Column(Integer, default=30, nullable=False)
+
+    # ✅ NOVOS CAMPOS PARA EVITAR SPAM DE LEMBRETES
+    lembrete_1h_enviado = Column(Boolean, default=False)
+    lembrete_30min_enviado = Column(Boolean, default=False)
 
     cliente = relationship("Cliente", back_populates="agendamentos")
     barbeiro = relationship("Barbeiro", back_populates="agendamentos")
-    servicos = relationship(
-        "Servico", secondary=agendamento_servico, back_populates="agendamentos"
-    )
-    produtos = relationship(
-        "Produto", secondary=agendamento_produto, back_populates="agendamentos"
-    )
+    servicos = relationship("Servico", secondary=agendamento_servico, back_populates="agendamentos")
+    produtos = relationship("Produto", secondary=agendamento_produto, back_populates="agendamentos")
 
     __table_args__ = (
         UniqueConstraint("barbeiro_id", "data", "hora", name="uq_barbeiro_data_hora"),

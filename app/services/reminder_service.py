@@ -96,17 +96,19 @@ async def verificar_e_enviar_aniversariantes(db: AsyncSession):
             await db.rollback()
 
 
+# app/services/reminder_service.py
+
+
 async def verificar_e_enviar_lembretes_agendamento(db: AsyncSession):
     """
     Envia lembretes automáticos: 1h antes e 30min antes do agendamento.
-    CORREÇÃO: Removeu filtro is_confirmed para pegar todos os agendamentos futuros.
+    CORREÇÃO: Usa flags no banco para garantir envio único.
     """
     agora = datetime.now(tz_br)
     hoje = agora.date()
     amanha = hoje + timedelta(days=1)
 
-    # ✅ CORREÇÃO: Busca agendamentos de hoje e amanhã, SEM filtrar por is_confirmed
-    # Assim pega tanto os confirmados quanto os pendentes
+    # Busca agendamentos de hoje e amanhã
     stmt = (
         select(Agendamento)
         .options(
@@ -117,7 +119,6 @@ async def verificar_e_enviar_lembretes_agendamento(db: AsyncSession):
         .where(
             Agendamento.data.between(hoje, amanha),
             Agendamento.pago == False,
-            # Removido: Agendamento.is_confirmed == True
         )
     )
     result = await db.execute(stmt)
@@ -131,22 +132,15 @@ async def verificar_e_enviar_lembretes_agendamento(db: AsyncSession):
         diferenca = dt_agendamento - agora
         minutos_restantes = diferenca.total_seconds() / 60
 
-        # Pula se já passou ou se é muito distante (> 70min para dar margem à janela de 1h)
+        # Pula se já passou ou se é muito distante (> 70min)
         if minutos_restantes < 0 or minutos_restantes > 70:
             continue
 
         mensagem = ""
         tipo_lembrete = ""
-        chave_unico = (
-            f"{agd.id}_{minutos_restantes:.0f}"  # Chave única para evitar spam no mesmo minuto
-        )
+        deve_enviar = False
 
-        # Evita enviar se já enviou nos últimos segundos (proteção contra loop rápido)
-        if chave_unico in enviados_recentemente:
-            continue
-
-        # 🔹 JANELA DE 1 HORA (entre 50min e 70min) - Alarguei um pouco para garantir
-        if 50 <= minutos_restantes <= 70:
+        if 50 <= minutos_restantes <= 70 and not agd.lembrete_1h_enviado:
             lista_servicos = ", ".join([s.nome for s in agd.servicos])
             mensagem = (
                 f"⏰ *LEMBRETE: Seu horário é em ~1 hora!*\n\n"
@@ -158,9 +152,9 @@ async def verificar_e_enviar_lembretes_agendamento(db: AsyncSession):
                 f"Te esperamos! 💈✨"
             )
             tipo_lembrete = "1h"
+            deve_enviar = True
 
-        # 🔹 JANELA DE 30 MINUTOS (entre 20min e 40min)
-        elif 20 <= minutos_restantes <= 40:
+        elif 20 <= minutos_restantes <= 40 and not agd.lembrete_30min_enviado:
             mensagem = (
                 f"🚨 *FALTA POUCO!*\n\n"
                 f"Olá, *{agd.cliente.nome.split()[0]}*!\n\n"
@@ -170,9 +164,9 @@ async def verificar_e_enviar_lembretes_agendamento(db: AsyncSession):
                 f"Já estamos te esperando! 💈✂️"
             )
             tipo_lembrete = "30min"
+            deve_enviar = True
 
-        # 🔹 ENVIA MENSAGEM SE DENTRO DA JANELA
-        if mensagem:
+        if deve_enviar and mensagem:
             try:
                 sucesso = await enviar_mensagem_automatica(agd.cliente.telefone, mensagem)
 
@@ -180,15 +174,20 @@ async def verificar_e_enviar_lembretes_agendamento(db: AsyncSession):
                     print(
                         f"✅ Lembrete ({tipo_lembrete}) enviado para {agd.cliente.nome} ({minutos_restantes:.0f}min restantes)"
                     )
-                    # Adiciona ao cache para não repetir imediatamente
-                    enviados_recentemente.add(chave_unico)
-                    # Limpa o cache após alguns minutos para liberar memória (opcional em prod usar Redis TTL)
-                    if len(enviados_recentemente) > 100:
-                        enviados_recentemente.clear()
+
+                    # ✅ MARCA COMO ENVIADO NO BANCO E SALVA
+                    if tipo_lembrete == "1h":
+                        agd.lembrete_1h_enviado = True
+                    elif tipo_lembrete == "30min":
+                        agd.lembrete_30min_enviado = True
+
+                    await db.commit()  # Salva a mudança imediatamente
                 else:
                     print(f"❌ Falha ao enviar lembrete para {agd.cliente.nome}")
+                    await db.rollback()
             except Exception as e:
                 print(f"❌ Erro ao enviar lembrete: {e}")
+                await db.rollback()
 
 
 async def loop_de_verificacao(db_session_maker):
