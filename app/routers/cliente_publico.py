@@ -1,11 +1,13 @@
-from fastapi import APIRouter, Request, Depends, status, Form
+from fastapi import APIRouter, Request, Depends, status
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import datetime, timedelta, date, time
+from datetime import datetime, date, time, timedelta
 import pytz
 from sqlalchemy import select, delete, insert
 from sqlalchemy.orm import selectinload
+import asyncio
+
 from app.database import get_db, AsyncSessionLocal
 from app.models import Cliente, Barbeiro, Servico, Agendamento, Configuracao
 from app.models.servico import agendamento_servico
@@ -14,11 +16,8 @@ from app.services.agendamento_service import (
     criar_agendamento,
     verificar_disponibilidade,
 )
-
-# Importando a nova lógica inteligente
 from app.utils.horarios import gerar_slots_disponiveis, filtrar_conflitos
-
-import asyncio
+from app.services import whatsapp_service
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -91,6 +90,7 @@ async def area_cliente_agendar(request: Request, db: AsyncSession = Depends(get_
     cliente_atual = (
         (await db.execute(select(Cliente).where(Cliente.id == cliente_id))).scalars().first()
     )
+
     # ✅ Ordem Alfabética Garantida
     barbeiros = (await db.execute(select(Barbeiro).order_by(Barbeiro.nome))).scalars().all()
     servicos = (await db.execute(select(Servico).order_by(Servico.nome))).scalars().all()
@@ -128,7 +128,7 @@ async def area_cliente_agendar(request: Request, db: AsyncSession = Depends(get_
     ocupados_res = await db.execute(stmt_ocupados)
     ocupados = ocupados_res.all()  # Lista de tuplas (time, int)
 
-    # 3. Filtra conflitos usando a duração real do serviço selecionado
+    # 3. Filtra conflitos usando a duração real do serviço selecionado + buffer de 10min
     horarios_livres = filtrar_conflitos(
         slots_gerados, ocupados, duracao_necessaria=duracao_total, buffer=10
     )
@@ -181,9 +181,11 @@ async def area_cliente_confirmar(request: Request, db: AsyncSession = Depends(ge
             servico_ids=servico_ids,
             duracao_minutos=duracao_total,
         )
+
+        # Chama o serviço que já contém a validação de horário de funcionamento
         novo_agd = await criar_agendamento(db, dados)
 
-        # Disparo do WhatsApp para novo agendamento
+        # Disparo do WhatsApp para novo agendamento (Background)
         try:
             await asyncio.sleep(0.5)
             await enviar_notificacoes_agendamento(novo_agd.id)
@@ -193,8 +195,17 @@ async def area_cliente_confirmar(request: Request, db: AsyncSession = Depends(ge
         return RedirectResponse(
             url="/cliente/meus-agendamentos?msg=Agendamento+realizado!", status_code=303
         )
-    except Exception as e:
+
+    except ValueError as e:
+        # Captura erros específicos como "Horário ultrapassa funcionamento"
+        print(f"⚠️ [BLOQUEIO DE AGENDAMENTO] Cliente ID: {cliente_id} | Erro: {str(e)}")
         return RedirectResponse(url=f"/cliente/agendar?erro={str(e)}", status_code=303)
+
+    except Exception as e:
+        print(f"❌ [ERRO CRÍTICO] Falha ao agendar: {e}")
+        return RedirectResponse(
+            url="/cliente/agendar?erro=Erro+interno+do+sistema", status_code=303
+        )
 
 
 @router.get("/cliente/meus-agendamentos", response_class=HTMLResponse)
@@ -268,14 +279,12 @@ async def cliente_editar_agendamento(
     stmt_config = select(Configuracao).limit(1)
     config = (await db.execute(stmt_config)).scalars().first()
 
-    # ✅ Ordem Alfabética Garantida
     barbeiros = (await db.execute(select(Barbeiro).order_by(Barbeiro.nome))).scalars().all()
     servicos = (await db.execute(select(Servico).order_by(Servico.nome))).scalars().all()
 
-    # ✅ Usa a nova lógica inteligente para edição também (PASSANDO DB)
     duracao_atual = agendamento.duracao_minutos or 30
 
-    # 1. Gera slots (CORREÇÃO: Passando 'db' como primeiro argumento)
+    # 1. Gera slots
     slots_gerados = await gerar_slots_disponiveis(db, config, agendamento.data, passo_minutos=10)
 
     # 2. Busca ocupados (excluindo o próprio agendamento sendo editado)
@@ -313,6 +322,9 @@ async def cliente_editar_agendamento(
     )
 
 
+# app/routers/cliente_publico.py
+
+
 @router.post("/cliente/editar/{agendamento_id}")
 async def cliente_editar_agendamento_action(
     agendamento_id: int, request: Request, db: AsyncSession = Depends(get_db)
@@ -323,6 +335,7 @@ async def cliente_editar_agendamento_action(
 
     form = await request.form()
 
+    # Buscar agendamento original
     stmt = (
         select(Agendamento)
         .options(
@@ -341,13 +354,12 @@ async def cliente_editar_agendamento_action(
             status_code=303,
         )
 
-    # Salvar dados antigos ANTES de alterar
+    # Salvar dados antigos para notificação
     data_antiga = agendamento.data.strftime("%d/%m/%Y")
     hora_antiga = agendamento.hora.strftime("%H:%M")
-    horario_antigo_datetime = datetime.combine(agendamento.data, agendamento.hora)
     barbeiro_nome = agendamento.barbeiro.nome
     cliente_nome = agendamento.cliente.nome
-    servicos_nomes = [s.nome for s in agendamento.servicos]
+    servicos_nomes_antigos = [s.nome for s in agendamento.servicos]
 
     try:
         nova_data = datetime.strptime(form["data"], "%Y-%m-%d").date()
@@ -355,26 +367,63 @@ async def cliente_editar_agendamento_action(
         novo_barbeiro_id = int(form["barbeiro"])
         novos_servico_ids = [int(x) for x in form.getlist("servico")]
 
-        # ✅ Calcular NOVA duração
+        # ✅ 1. Calcular NOVA duração total
         stmt_serv = select(Servico).where(Servico.id.in_(novos_servico_ids))
         res_serv = await db.execute(stmt_serv)
         servicos_sel = res_serv.scalars().all()
         nova_duracao = sum(s.duracao_minutos for s in servicos_sel) if servicos_sel else 30
 
-        # Verificar disponibilidade do novo horário com a NOVA duração
+        # ✅ 2. Verificar Disponibilidade (Conflito com outros clientes)
+        # Usamos a função verificar_disponibilidade que já checa sobreposição baseada na duração
         ocupado = await verificar_disponibilidade(
             db,
             novo_barbeiro_id,
             nova_data,
             nova_hora,
             duracao_minutos=nova_duracao,
-            exclude_id=agendamento_id,
+            exclude_id=agendamento_id,  # Exclui o próprio agendamento da verificação
         )
+
         if ocupado:
             return RedirectResponse(
-                url=f"/cliente/editar/{agendamento_id}?erro=Horário+indisponível",
+                url=f"/cliente/editar/{agendamento_id}?erro=Horário+indisponível+para+a+nova+duração+selecionada.",
                 status_code=303,
             )
+
+        # ✅ 3. Verificar Horário de Funcionamento (Ex: Sábado até 12h)
+        from app.models.configuracao import Configuracao
+
+        stmt_config = select(Configuracao).limit(1)
+        res_config = await db.execute(stmt_config)
+        config = res_config.scalars().first()
+
+        if config:
+            dia_semana = nova_data.weekday()
+
+            if dia_semana == 6:  # Domingo
+                raise ValueError("A barbearia não funciona aos domingos.")
+
+            if dia_semana == 5:  # Sábado
+                limite_horario = time(12, 0)
+            else:
+                limite_horario = config.horario_fim_tarde or time(18, 30)
+
+            # Calcular horário de término
+            dt_inicio = datetime.combine(nova_data, nova_hora)
+            dt_fim = dt_inicio + timedelta(minutes=nova_duracao)
+
+            # Tolerância de 5 minutos
+            limite_com_tolerancia = (
+                datetime.combine(nova_data, limite_horario) + timedelta(minutes=5)
+            ).time()
+
+            if dt_fim.time() > limite_com_tolerancia:
+                return RedirectResponse(
+                    url=f"/cliente/editar/{agendamento_id}?erro=Este+serviço+ultrapassa+o+horário+de+funcionamento+({limite_horario.strftime('%H:%M')}).",
+                    status_code=303,
+                )
+
+        # --- Se passou pelas validações, atualiza o banco ---
 
         # Atualizar dados básicos
         agendamento.data = nova_data
@@ -402,15 +451,13 @@ async def cliente_editar_agendamento_action(
         data_nova = nova_data.strftime("%d/%m/%Y")
         hora_nova = nova_hora.strftime("%H:%M")
 
-        from app.services import whatsapp_service
-
         msg = whatsapp_service.gerar_mensagem_alteracao_agendamento(
             cliente_nome=cliente_nome,
             data_antiga=data_antiga,
             hora_antiga=hora_antiga,
             data_nova=data_nova,
             hora_nova=hora_nova,
-            servicos_nomes=servicos_nomes,
+            servicos_nomes=servicos_nomes_antigos,  # Envia os nomes antigos ou novos, conforme preferência
         )
 
         stmt_cfg = select(Configuracao).limit(1)
@@ -459,14 +506,11 @@ async def cliente_cancelar_agendamento(
         hora_str = agendamento.hora.strftime("%H:%M")
         barbeiro_nome = agendamento.barbeiro.nome if agendamento.barbeiro else "Equipe"
         servicos_nomes = [s.nome for s in agendamento.servicos]
-        horario_vago = datetime.combine(agendamento.data, agendamento.hora)
 
         await db.delete(agendamento)
         await db.commit()
 
         try:
-            from app.services import whatsapp_service
-
             msg = whatsapp_service.gerar_mensagem_cancelamento(
                 cliente_nome=cliente_nome,
                 data_str=data_str,
@@ -523,8 +567,6 @@ async def enviar_notificacoes_agendamento(agendamento_id: int):
             hora_str = agd.hora.strftime("%H:%M")
 
             if tel_barbearia:
-                from app.services import whatsapp_service
-
                 msg_barb = whatsapp_service.gerar_mensagem_novo_agendamento(
                     agd.cliente.nome,
                     servicos_nomes,
@@ -533,8 +575,6 @@ async def enviar_notificacoes_agendamento(agendamento_id: int):
                     agd.barbeiro.nome if agd.barbeiro else "Equipe",
                 )
                 await whatsapp_service.enviar_mensagem_automatica(tel_barbearia, msg_barb)
-
-            from app.services import whatsapp_service
 
             msg_cliente = whatsapp_service.gerar_mensagem_confirmacao_cliente(
                 agd.cliente.nome.split()[0],

@@ -66,7 +66,6 @@ async def cadastrar_cliente_action(request: Request, db: AsyncSession = Depends(
 
 @router.get("/lista-clientes", response_class=HTMLResponse)
 async def listar_clientes(request: Request, db: AsyncSession = Depends(get_db)):
-    order.by = request.query_params.get("order_by", "nome")
     clientes_com_visitas = await admin_service.get_clientes_com_visitas(db)
     return templates.TemplateResponse(
         "clientes/lista_clientes.html",

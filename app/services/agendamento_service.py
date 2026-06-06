@@ -1,16 +1,76 @@
+# app/services/agendamento_service.py
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, insert, delete, and_, or_
+from sqlalchemy import select, insert, delete
 from sqlalchemy.orm import selectinload
 from datetime import date, time, datetime, timedelta
 from typing import List, Optional, Dict
 from decimal import Decimal
 
 from app.models.agendamento import Agendamento
-from app.models.servico import Servico
+from app.models.servico import Servico, agendamento_servico
 from app.models.produto import Produto, agendamento_produto
-from app.models.cliente import Cliente
-from app.models.barbeiro import Barbeiro
 from app.schemas.agendamento import AgendamentoCreate
+
+# =============================================================================
+# FUNÇÕES AUXILIARES INTERNAS (LÓGICA LEVE)
+# =============================================================================
+
+
+async def _get_duracao_total(db: AsyncSession, servico_ids: List[int]) -> int:
+    """Calcula a duração total em minutos baseada nos IDs dos serviços."""
+    if not servico_ids:
+        return 30  # Padrão seguro
+
+    stmt = select(Servico.duracao_minutos).where(Servico.id.in_(servico_ids))
+    result = await db.execute(stmt)
+    duracoes = result.scalars().all()
+
+    # Soma as durações, ignorando nulos, com fallback para 30 se a lista estiver vazia
+    total = sum(d for d in duracoes if d)
+    return total if total > 0 else 30
+
+
+def _time_to_minutes(t: time) -> int:
+    """Converte objeto time para minutos totais desde o início do dia."""
+    return t.hour * 60 + t.minute
+
+
+async def _checar_conflito(
+    db: AsyncSession,
+    barbeiro_id: int,
+    data: date,
+    inicio_min: int,
+    fim_min: int,
+    exclude_id: Optional[int] = None,
+) -> bool:
+    """
+    Verifica conflito usando matemática simples de minutos.
+    Retorna True se houver conflito.
+    """
+    # Busca apenas os horários e durações dos agendamentos existentes para esse barbeiro/data
+    stmt = select(Agendamento.hora, Agendamento.duracao_minutos).where(
+        Agendamento.barbeiro_id == barbeiro_id,
+        Agendamento.data == data,
+        Agendamento.id != exclude_id if exclude_id else True,
+    )
+
+    result = await db.execute(stmt)
+    ocupados = result.all()
+
+    for occ_hora, occ_duracao in ocupados:
+        occ_inicio = _time_to_minutes(occ_hora)
+        occ_fim = occ_inicio + (occ_duracao or 30)
+
+        # Lógica de sobreposição: (InicioA < FimB) e (FimA > InicioB)
+        if inicio_min < occ_fim and fim_min > occ_inicio:
+            return True
+
+    return False
+
+
+# =============================================================================
+# FUNÇÕES PÚBLICAS DO SERVIÇO
+# =============================================================================
 
 
 async def verificar_disponibilidade(
@@ -21,76 +81,84 @@ async def verificar_disponibilidade(
     duracao_minutos: int = 30,
     exclude_id: Optional[int] = None,
 ) -> bool:
-    """
-    Verifica se há conflito de horário considerando a DURAÇÃO do serviço.
-    Retorna True se ESTÁ OCUPADO, False se está livre.
-    """
-    from sqlalchemy import and_, or_
-
-    # Calcula o intervalo do novo agendamento
-    dt_inicio = datetime.combine(data, hora_inicio)
-    dt_fim = dt_inicio + timedelta(minutes=duracao_minutos)
-
-    # Busca agendamentos que se SOBREPÕEM com este intervalo
-    # Lógica: [inicio_novo, fim_novo) intersect [inicio_existente, fim_existente) ≠ ∅
-    stmt = select(Agendamento).where(
-        Agendamento.barbeiro_id == barbeiro_id,
-        Agendamento.data == data,
-        Agendamento.id != exclude_id if exclude_id else True,
-        # Sobreposição: começa antes do fim do novo E termina depois do início do novo
-        Agendamento.hora < dt_fim.time(),
-        # Para calcular fim_existente, usamos duracao_minutos do agendamento ou padrão 30
-        # Se sua tabela agendamentos já tem duracao_minutos, use:
-        # (Agendamento.hora + timedelta(minutes=Agendamento.duracao_minutos)) > dt_inicio.time()
-        # Por enquanto, usamos 30min como fallback:
-        (Agendamento.hora + timedelta(minutes=30)) > dt_inicio.time(),
-    )
-
-    result = await db.execute(stmt)
-    return result.scalars().first() is not None
+    """Verifica se um horário está disponível (True = Ocupado/Conflito)."""
+    inicio_min = _time_to_minutes(hora_inicio)
+    fim_min = inicio_min + duracao_minutos
+    return await _checar_conflito(db, barbeiro_id, data, inicio_min, fim_min, exclude_id)
 
 
-async def criar_agendamento(db: AsyncSession, dados: AgendamentoCreate):
-    """
-    Cria um novo agendamento com verificação de disponibilidade considerando duração.
-    """
-    # Calcular duração total dos serviços selecionados
-    duracao_total = 30  # Valor padrão
-    if dados.servico_ids and len(dados.servico_ids) > 0:
-        stmt_serv = select(Servico).where(Servico.id.in_(dados.servico_ids))
-        result_serv = await db.execute(stmt_serv)
-        servicos_sel = result_serv.scalars().all()
-        duracao_total = (
-            sum(s.duracao_minutos for s in servicos_sel if s.duracao_minutos) or 30
-        )
+# app/services/agendamento_service.py
 
-    # Verificar disponibilidade COM a duração calculada
-    ocupado = await verificar_disponibilidade(
-        db,
-        dados.barbeiro_id,
-        dados.data,
-        dados.hora,
-        duracao_minutos=duracao_total,  # ← Passa a duração para verificação
-    )
-    if ocupado:
+
+async def criar_agendamento(db: AsyncSession, dados: AgendamentoCreate) -> Agendamento:
+    """Cria um novo agendamento após verificar disponibilidade e regras de negócio."""
+
+    # 1. Calcular duração total
+    duracao_total = await _get_duracao_total(db, dados.servico_ids)
+
+    # 2. Verificar disponibilidade (Conflito de Horário)
+    # A função verificar_disponibilidade já deve lidar com objetos time corretamente
+    if await verificar_disponibilidade(
+        db, dados.barbeiro_id, dados.data, dados.hora, duracao_total
+    ):
         raise ValueError("Horário indisponível para a duração selecionada.")
 
-    # Criar agendamento
+    # 3. ✅ CORREÇÃO CRÍTICA: Validação de Horário de Funcionamento (Ex: Sábado às 12h)
+    from app.models.configuracao import Configuracao
+
+    stmt_config = select(Configuracao).limit(1)
+    res_config = await db.execute(stmt_config)
+    config = res_config.scalars().first()
+
+    if config:
+        dia_semana = dados.data.weekday()
+
+        # Definir limite do dia
+        if dia_semana == 6:  # Domingo
+            raise ValueError("A barbearia não funciona aos domingos.")
+
+        if dia_semana == 5:  # Sábado
+            limite_horario = time(12, 0)
+        else:
+            # Dias de semana: usa o fim da tarde configurado
+            limite_horario_str = config.horario_fim_tarde or "18:30"
+            # Garante conversão segura
+            try:
+                limite_horario = datetime.strptime(limite_horario_str, "%H:%M").time()
+            except:
+                limite_horario = time(18, 30)
+
+        # Calcular horário de término do agendamento
+        # dados.hora JÁ É UM OBJETO TIME vindo do schema
+        dt_inicio = datetime.combine(dados.data, dados.hora)
+        dt_fim = dt_inicio + timedelta(minutes=duracao_total)
+
+        # Tolerância de 5 minutos
+        limite_com_tolerancia_dt = datetime.combine(dados.data, limite_horario) + timedelta(
+            minutes=5
+        )
+
+        if dt_fim > limite_com_tolerancia_dt:
+            raise ValueError(
+                f"Este serviço ultrapassa o horário de funcionamento ({limite_horario.strftime('%H:%M')}). Escolha um horário mais cedo."
+            )
+
+    # 4. Criar objeto base
     novo_agd = Agendamento(
         cliente_id=dados.cliente_id,
         barbeiro_id=dados.barbeiro_id,
         data=dados.data,
-        hora=dados.hora,
+        hora=dados.hora,  # Objeto time válido
         pago=False,
         is_confirmed=False,
-        duracao_minutos=duracao_total,  # ← Salva a duração usada
+        duracao_minutos=duracao_total,
     )
 
-    # Associar serviços
-    if dados.servico_ids and len(dados.servico_ids) > 0:
+    # 5. Associar serviços
+    if dados.servico_ids:
         stmt = select(Servico).where(Servico.id.in_(dados.servico_ids))
         result = await db.execute(stmt)
-        novo_agd.servicos = result.scalars().all()
+        novo_agd.servicos = list(result.scalars().all())
 
     db.add(novo_agd)
     await db.commit()
@@ -116,11 +184,10 @@ async def confirmar_pagamento_e_baixar_estoque(
     agendamento_id: int,
     servico_ids: List[int],
     produtos_qtd: Dict[int, int],
-):
-    """
-    Confirma pagamento, atualiza serviços/produtos e baixa estoque.
-    Mantém a duração calculada com base nos novos serviços.
-    """
+) -> Dict:
+    """Confirma pagamento, atualiza serviços/produtos e baixa estoque."""
+
+    # Buscar agendamento
     stmt = (
         select(Agendamento)
         .options(
@@ -131,6 +198,7 @@ async def confirmar_pagamento_e_baixar_estoque(
         )
         .where(Agendamento.id == agendamento_id)
     )
+
     result = await db.execute(stmt)
     agd = result.scalars().first()
 
@@ -139,33 +207,29 @@ async def confirmar_pagamento_e_baixar_estoque(
     if agd.pago:
         raise ValueError("Este agendamento já foi pago.")
 
-    # 🔹 Atualizar Serviços e recalcular duração
+    # --- Atualizar Serviços e Duração ---
     agd.servicos.clear()
-    duracao_total = 30
+    duracao_total = await _get_duracao_total(db, servico_ids)
 
-    if servico_ids and len(servico_ids) > 0:
+    if servico_ids:
         stmt_serv = select(Servico).where(Servico.id.in_(servico_ids))
         res_serv = await db.execute(stmt_serv)
-        for s in res_serv.scalars().all():
-            agd.servicos.append(s)
-            duracao_total += s.duracao_minutos or 30
+        agd.servicos = list(res_serv.scalars().all())
 
-    # Atualiza a duração no agendamento
     agd.duracao_minutos = duracao_total
 
-    # 🔹 Processar Produtos com INSERT MANUAL para garantir quantidade
+    # --- Processar Produtos e Baixar Estoque ---
     total_produtos_val = Decimal("0.00")
 
     # Limpar associações antigas de produtos
     await db.execute(
-        delete(agendamento_produto).where(
-            agendamento_produto.c.agendamento_id == agd.id
-        )
+        delete(agendamento_produto).where(agendamento_produto.c.agendamento_id == agd.id)
     )
 
     for prod_id, qtd in produtos_qtd.items():
         if qtd <= 0:
             continue
+
         stmt_prod = select(Produto).where(Produto.id == prod_id)
         res_prod = await db.execute(stmt_prod)
         produto = res_prod.scalars().first()
@@ -187,11 +251,10 @@ async def confirmar_pagamento_e_baixar_estoque(
             )
         )
 
-    # 🔹 Calcular totais
+    # --- Finalizar ---
     total_servicos_val = sum(s.preco for s in agd.servicos)
     total_geral = total_servicos_val + total_produtos_val
 
-    # 🔹 Marcar como pago e confirmado
     agd.pago = True
     agd.is_confirmed = True
 
@@ -215,10 +278,8 @@ async def atualizar_agendamento(
     novo_barbeiro_id: int,
     novos_servico_ids: List[int],
 ) -> Agendamento:
-    """
-    Atualiza um agendamento existente com nova data/hora/barbeiro/serviços.
-    Inclui verificação de disponibilidade com duração dinâmica.
-    """
+    """Atualiza um agendamento existente com nova data/hora/barbeiro/serviços."""
+
     # Buscar agendamento
     stmt = select(Agendamento).where(Agendamento.id == agendamento_id)
     result = await db.execute(stmt)
@@ -228,42 +289,29 @@ async def atualizar_agendamento(
         raise ValueError("Agendamento não encontrado.")
 
     # Calcular nova duração
-    duracao_total = 30
-    if novos_servico_ids:
-        stmt_serv = select(Servico).where(Servico.id.in_(novos_servico_ids))
-        res_serv = await db.execute(stmt_serv)
-        servicos_sel = res_serv.scalars().all()
-        duracao_total = (
-            sum(s.duracao_minutos for s in servicos_sel if s.duracao_minutos) or 30
-        )
+    duracao_total = await _get_duracao_total(db, novos_servico_ids)
 
-    # Verificar disponibilidade do NOVO horário com a NOVA duração
-    ocupado = await verificar_disponibilidade(
-        db,
-        novo_barbeiro_id,
-        nova_data,
-        nova_hora,
-        duracao_minutos=duracao_total,
-        exclude_id=agendamento_id,  # Exclui o próprio agendamento da verificação
-    )
-    if ocupado:
+    # Verificar disponibilidade do NOVO horário
+    inicio_min = _time_to_minutes(nova_hora)
+    fim_min = inicio_min + duracao_total
+
+    if await _checar_conflito(
+        db, novo_barbeiro_id, nova_data, inicio_min, fim_min, exclude_id=agendamento_id
+    ):
         raise ValueError("Novo horário indisponível para a duração selecionada.")
 
-    # Atualizar dados
+    # Atualizar dados básicos
     agd.data = nova_data
     agd.hora = nova_hora
     agd.barbeiro_id = novo_barbeiro_id
     agd.duracao_minutos = duracao_total
 
-    # Atualizar serviços (via tabela associativa para evitar greenlet_spawn)
+    # Atualizar serviços (via delete/insert manual para garantir consistência)
     await db.execute(
-        delete(app.models.servico.agendamento_servico).where(
-            app.models.servico.agendamento_servico.c.agendamento_id == agendamento_id
-        )
+        delete(agendamento_servico).where(agendamento_servico.c.agendamento_id == agendamento_id)
     )
-    if novos_servico_ids:
-        from app.models.servico import agendamento_servico
 
+    if novos_servico_ids:
         for serv_id in novos_servico_ids:
             await db.execute(
                 insert(agendamento_servico).values(

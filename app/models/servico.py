@@ -19,10 +19,9 @@ class Servico(Base):
     nome = Column(String(100), nullable=False)
     descricao = Column(String, nullable=True)
     preco = Column(Numeric(10, 2), nullable=False)
-    ativo = Column(Boolean, default=True)  # ← Agora Boolean está importado!
+    ativo = Column(Boolean, default=True)
 
-    # ✅ NOVO: Duração estimada do serviço em minutos (padrão: 30)
-    duracao_minutos = Column(Integer, default=30, nullable=False)
+    duracao_minutos = Column(Integer, default=10, nullable=False)
 
     # Relacionamento com Agendamentos
     agendamentos = relationship(
