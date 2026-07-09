@@ -15,7 +15,7 @@ from datetime import date
 from app.database import get_db
 from app.models import Cliente
 from app.schemas.cliente import ClienteCreate, ClienteResponse, ClienteUpdate
-from app.utils.phone_utils import normalize_phone_for_storage
+from app.utils.phone_utils import format_phone_for_storage
 
 router = APIRouter(
     prefix="/api/clientes",
@@ -103,7 +103,7 @@ async def buscar_cliente_telefone(
     O sistema normaliza o telefone e faz busca flexível.
     Pode retornar múltiplos clientes se houver duplicatas.
     """
-    telefone_normalizado = normalize_phone_for_storage(telefone)
+    telefone_normalizado = format_phone_for_storage(telefone)
     
     stmt = select(Cliente).where(Cliente.telefone.like(f"%{telefone_normalizado}"))
     result = await db.execute(stmt)
@@ -175,7 +175,7 @@ async def criar_cliente(
     O telefone será normalizado para o formato internacional (5573999999999).
     """
     # Verificar se já existe cliente com mesmo telefone
-    telefone_normalizado = normalize_phone_for_storage(cliente.telefone)
+    telefone_normalizado = format_phone_for_storage(cliente.telefone)
     
     stmt = select(Cliente).where(Cliente.telefone == telefone_normalizado)
     result = await db.execute(stmt)
@@ -239,7 +239,7 @@ async def atualizar_cliente(
         cliente.nome = cliente_update.nome
     
     if cliente_update.telefone is not None:
-        telefone_normalizado = normalize_phone_for_storage(cliente_update.telefone)
+        telefone_normalizado = format_phone_for_storage(cliente_update.telefone)
         
         # Verificar se novo telefone já existe
         stmt_check = select(Cliente).where(
