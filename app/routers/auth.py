@@ -13,6 +13,7 @@ templates = Jinja2Templates(directory="app/templates")
 # Credenciais (Idealmente viriam do .env)
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
 RECEPCAO_PASSWORD = os.getenv("RECEPCAO_PASSWORD", "recepcao123")
+SUPER_ADMIN_PASSWORD = os.getenv("SUPER_ADMIN_PASSWORD", "")  # Super admin (desenvolvedor)
 
 
 @router.get("/")
@@ -68,8 +69,18 @@ async def login_action(request: Request, db: AsyncSession = Depends(get_db)):
         else os.getenv("ADMIN_PASSWORD", "admin123")
     )
     senha_recepcao = os.getenv("RECEPCAO_PASSWORD", "recepcao123")
+    senha_super_admin = os.getenv("SUPER_ADMIN_PASSWORD", "")
 
-    if senha == senha_admin_correta:
+    # Verificar Super Admin primeiro (acesso de desenvolvedor)
+    if senha_super_admin and senha == senha_super_admin:
+        request.session["is_logged"] = True
+        request.session["user_role"] = "super_admin"
+        request.session["user_name"] = "Super Admin"
+        return RedirectResponse(
+            url="/agendamentos", status_code=status.HTTP_303_SEE_OTHER
+        )
+
+    elif senha == senha_admin_correta:
         request.session["is_logged"] = True
         request.session["user_role"] = "admin"
         request.session["user_name"] = "Administrador"

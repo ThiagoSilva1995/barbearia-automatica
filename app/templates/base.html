@@ -47,7 +47,7 @@
                                 </a>
                                 
                                 <!-- ✅ Barbeiros SÓ PARA ADMIN -->
-                                {% if request.session.get('user_role') == 'admin' %}
+                                {% if request.session.get('user_role') in ['admin', 'super_admin'] %}
                                 <a href="/cadastrar-barbeiro" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 hover:text-blue-600 transition">
                                     <i class="fas fa-user-tie mr-2 text-gray-400"></i> Barbeiros
                                 </a>
@@ -57,21 +57,21 @@
                     </div>
 
                     <!-- ✅ SERVIÇOS SÓ PARA ADMIN -->
-                    {% if request.session.get('user_role') == 'admin' %}
+                    {% if request.session.get('user_role') in ['admin', 'super_admin'] %}
                     <a href="/servicos" class="px-3 py-2 rounded-md text-sm font-medium text-slate-600 hover:bg-blue-50 hover:text-blue-600 transition flex items-center gap-1">
                         <i class="fas fa-cut"></i> Serviços
                     </a>
                     {% endif %}
 
                     <!-- ✅ PRODUTOS SÓ PARA ADMIN -->
-                    {% if request.session.get('user_role') == 'admin' %}
+                    {% if request.session.get('user_role') in ['admin', 'super_admin'] %}
                     <a href="/produtos" class="px-3 py-2 rounded-md text-sm font-medium text-slate-600 hover:bg-blue-50 hover:text-blue-600 transition flex items-center gap-1">
                         <i class="fas fa-box-open"></i> Produtos
                     </a>
                     {% endif %}
 
                     <!-- ✅ GESTÃO SÓ PARA ADMIN -->
-                    {% if request.session.get('user_role') == 'admin' %}
+                    {% if request.session.get('user_role') in ['admin', 'super_admin'] %}
                     <div class="relative group">
                         <button class="px-3 py-2 rounded-md text-sm font-medium text-slate-600 hover:bg-blue-50 hover:text-blue-600 transition flex items-center gap-1 focus:outline-none">
                             <i class="fas fa-cog"></i> Gestão <i class="fas fa-chevron-down text-xs ml-1"></i>
@@ -102,7 +102,11 @@
                     <!-- User Info -->
                     <div class="hidden sm:flex flex-col items-end mr-2">
                         <span class="text-sm font-bold text-slate-700">{{ request.session.get('user_name', 'Usuário') }}</span>
+                        {% if request.session.get('user_role') == 'super_admin' %}
+                        <span class="text-xs text-purple-600 uppercase font-bold">👑 Super Admin</span>
+                        {% else %}
                         <span class="text-xs text-slate-500 uppercase">{{ request.session.get('user_role', 'Recepção') }}</span>
+                        {% endif %}
                     </div>
 
                     <!-- Logout Button -->
@@ -129,7 +133,7 @@
                 </a>
                 
                 <!-- ✅ Itens de Admin no Mobile -->
-                {% if request.session.get('user_role') == 'admin' %}
+                {% if request.session.get('user_role') in ['admin', 'super_admin'] %}
                 <a href="/cadastrar-barbeiro" class="block px-3 py-2 rounded-md text-base font-medium text-gray-700 hover:text-blue-600 hover:bg-gray-50">
                     <i class="fas fa-user-tie w-6"></i> Barbeiros
                 </a>
