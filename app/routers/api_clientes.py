@@ -6,7 +6,7 @@ Endpoints REST para gerenciamento de clientes da barbearia.
 Documentação completa disponível em /docs (Swagger UI)
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Path
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import List, Optional
@@ -126,8 +126,8 @@ async def buscar_cliente_telefone(
     response_description="Lista de clientes aniversariantes"
 )
 async def buscar_aniversariantes(
-    mes: int = Query(..., ge=1, le=12, description="Mês (1-12)"),
-    dia: int = Query(..., ge=1, le=31, description="Dia (1-31)"),
+    mes: int = Path(..., ge=1, le=12, description="Mês (1-12)"),
+    dia: int = Path(..., ge=1, le=31, description="Dia (1-31)"),
     db: AsyncSession = Depends(get_db)
 ):
     """
