@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from datetime import date, datetime, time
+import json
 
 from app.database import get_db
 from app.models import Agendamento, Cliente, Barbeiro, Servico
@@ -357,7 +358,7 @@ async def cancelar_agendamento(
 async def confirmar_pagamento(
     agendamento_id: int,
     servico_ids: List[int] = Query(..., description="Lista de IDs dos serviços cobrados"),
-    produtos_qtd: Optional[dict] = Query(None, description="Dicionário {produto_id: quantidade}"),
+    produtos_qtd: Optional[str] = Query(None, description="JSON string: {\"produto_id\": quantidade}"),
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -365,7 +366,7 @@ async def confirmar_pagamento(
     
     - **agendamento_id**: ID do agendamento
     - **servico_ids**: Lista de IDs dos serviços cobrados
-    - **produtos_qtd**: Dicionário com quantidade de produtos vendidos (opcional)
+    - **produtos_qtd**: String JSON com quantidade de produtos vendidos (opcional). Exemplo: `{"1": 2, "3": 1}`
     
     O sistema:
     - Marca o agendamento como pago
@@ -375,8 +376,21 @@ async def confirmar_pagamento(
     Retorna erro 404 se agendamento não encontrado ou já pago.
     """
     try:
+        # Parse JSON string para dict
+        produtos_dict = {}
+        if produtos_qtd:
+            try:
+                produtos_dict = json.loads(produtos_qtd)
+                # Converter chaves para int
+                produtos_dict = {int(k): int(v) for k, v in produtos_dict.items()}
+            except (json.JSONDecodeError, ValueError) as e:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Formato inválido para produtos_qtd. Use JSON: {str(e)}"
+                )
+        
         resultado = await confirmar_pagamento_e_baixar_estoque(
-            db, agendamento_id, servico_ids, produtos_qtd or {}
+            db, agendamento_id, servico_ids, produtos_dict
         )
         
         # Buscar agendamento atualizado
