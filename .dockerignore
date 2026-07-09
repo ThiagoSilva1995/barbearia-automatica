@@ -1,0 +1,89 @@
+# ============================================
+# Docker Ignore - Barbearia do Thales
+# ============================================
+
+# Git
+.git
+.gitignore
+
+# Ambiente virtual
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Arquivos de ambiente e credenciais (CRÍTICO!)
+.env
+.env1
+.env.local
+firebase-credentials.json
+credentials.json
+*.pem
+*.key
+
+# IDE
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Banco de dados local
+*.db
+*.sqlite3
+*.sqlite
+
+# Testes
+.pytest_cache/
+.coverage
+htmlcov/
+tests/
+
+# Documentação (não precisa na imagem)
+*.md
+!README.md
+docs/
+
+# Arquivos temporários
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# Docker (evitar loop)
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# Node modules (se houver)
+node_modules/
+
+# Arquivos de build
+dist/
+build/
+*.egg-info/
+
+# Backups
+*.backup
+*.bak
+*.old
+*.orig
+
+# Dados de teste
+test_data/
+tests/data/
+
+# Mídia temporária
+media/
+uploads/
+temp/

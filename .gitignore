@@ -1,37 +1,207 @@
-# Ambiente virtual Python
+# ============================================
+# Barbearia do Thales - GitIgnore Completo
+# ============================================
+
+# ============================================
+# AMBIENTE VIRTUAL PYTHON
+# ============================================
 venv/
 .venv/
+env/
+ENV/
+*.py[cod]
+*$py.class
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.egg-info/
+dist/
+build/
+*.egg
 
-# Arquivos de ambiente e senhas (NUNCA suba para o GitHub!)
+# ============================================
+# ARQUIVOS DE AMBIENTE E SENHAS (CRÍTICO!)
+# ============================================
+# NUNCA suba credenciais para o GitHub!
 .env
+.env1
+.env.local
+.env.*.local
+*.env
 *.env.local
+firebase-credentials.json
+firebase-service-account.json
+credentials.json
+service-account.json
+*.pem
+*.key
 
-# Banco de dados local (se usar SQLite)
+# ============================================
+# BANCO DE DADOS
+# ============================================
+# Banco local (SQLite)
 *.db
 *.sqlite3
+*.sqlite
+*.db-journal
+database.sqlite
 
-# Logs
+# ============================================
+# LOGS E ARQUIVOS TEMPORÁRIOS
+# ============================================
 *.log
 logs/
-
-# IDE
-.vscode/
-.idea/
+*.tmp
+*.temp
+*.bak
+*.backup
 *.swp
 *.swo
+*~
+.#*
 
-# Docker (opcional - se quiser subir apenas o compose)
+# ============================================
+# IDE E EDITORES
+# ============================================
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+.project
+.classpath
+.settings/
+.factorypath
+*.code-workspace
+
+# ============================================
+# SISTEMA OPERACIONAL
+# ============================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ============================================
+# DOCKER
+# ============================================
+# Manter apenas os arquivos de configuração
 !docker-compose.yml
 !Dockerfile
 !.dockerignore
 
-# Node modules (se houver frontend com npm)
-node_modules/
+# Volumes e dados do Docker
+docker-data/
+postgres-data/
+evolution-data/
 
-# Arquivos de sistema
-.DS_Store
-Thumbs.db
+# ============================================
+# TESTES E COBERTURA
+# ============================================
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# ============================================
+# JUPYTER NOTEBOOK
+# ============================================
+.ipynb_checkpoints/
+*.ipynb
+
+# ============================================
+# NODE MODULES (se houver frontend)
+# ============================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+
+# ============================================
+# ARQUIVOS DE BUILD E DISTRIBUIÇÃO
+# ============================================
+*.tar.gz
+*.zip
+*.war
+*.jar
+*.class
+
+# ============================================
+# ARQUIVOS ESPECÍFICOS DO PROJETO
+# ============================================
+# Dados de teste
+test_data/
+tests/data/
+fixtures/
+
+# Arquivos temporários do sistema
+*.pid
+*.seed
+*.pid.lock
+
+# ============================================
+# SEGURANÇA ADICIONAL
+# ============================================
+# Chaves SSH
+id_rsa
+id_rsa.pub
+id_dsa
+id_dsa.pub
+id_ecdsa
+id_ecdsa.pub
+
+# Certificados SSL
+*.crt
+*.csr
+
+# ============================================
+# BACKUPS
+# ============================================
+*.backup
+*.bak
+*.old
+*.orig
+
+# ============================================
+# ARQUIVOS DE CACHE
+# ============================================
+.cache/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# ============================================
+# DOCUMENTAÇÃO TEMPORÁRIA
+# ============================================
+# Se houver docs gerados automaticamente
+docs/_build/
+site/
+
+# ============================================
+# OUTROS
+# ============================================
+# Arquivos de configuração local
+*.local
+local_settings.py
+
+# Arquivos de dump de banco
+*.sql
+*.dump
+
+# Arquivos de mídia temporários
+media/
+uploads/
+temp/

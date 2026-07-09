@@ -17,6 +17,7 @@ from app.services.agendamento_service import (
     verificar_disponibilidade,
 )
 from app.utils.horarios import gerar_slots_disponiveis, filtrar_conflitos
+from app.utils.phone_utils import normalize_phone_for_search
 from app.services import whatsapp_service
 
 router = APIRouter()
@@ -37,7 +38,11 @@ async def area_cliente_acessar(request: Request, db: AsyncSession = Depends(get_
     if not telefone:
         return RedirectResponse(url="/cliente?erro=Telefone+inválido", status_code=303)
 
-    stmt = select(Cliente).where(Cliente.telefone == telefone)
+    # ✅ CORREÇÃO: Normalizar telefone para busca flexível
+    telefone_normalizado = normalize_phone_for_search(telefone)
+    
+    # Busca flexível: tenta encontrar cliente com telefone que termina com os dígitos informados
+    stmt = select(Cliente).where(Cliente.telefone.like(f"%{telefone_normalizado}"))
     res = await db.execute(stmt)
     cliente = res.scalars().first()
 
@@ -129,8 +134,26 @@ async def area_cliente_agendar(request: Request, db: AsyncSession = Depends(get_
     ocupados = ocupados_res.all()  # Lista de tuplas (time, int)
 
     # 3. Filtra conflitos usando a duração real do serviço selecionado + buffer de 10min
+    # ✅ CORREÇÃO: Passa o horário de fechamento para validar se não ultrapassa
+    horario_fechamento = None
+    if config:
+        # Determinar horário de fechamento baseado no dia da semana
+        dia_semana = data_selecionada.weekday()
+        if dia_semana == 5:  # Sábado
+            horario_fechamento = time(12, 0)
+        elif dia_semana != 6:  # Não é domingo
+            # Usa o fim da tarde configurado
+            if config.horario_fim_tarde:
+                try:
+                    horario_fechamento = datetime.strptime(config.horario_fim_tarde, "%H:%M").time()
+                except:
+                    horario_fechamento = time(18, 30)
+            else:
+                horario_fechamento = time(18, 30)
+    
     horarios_livres = filtrar_conflitos(
-        slots_gerados, ocupados, duracao_necessaria=duracao_total, buffer=10
+        slots_gerados, ocupados, duracao_necessaria=duracao_total, buffer=10,
+        horario_fechamento=horario_fechamento
     )
 
     # ✅ Obter horário selecionado (para manter marcado)
@@ -297,8 +320,24 @@ async def cliente_editar_agendamento(
     ocupados = ocupados_res.all()
 
     # 3. Filtra
+    # ✅ CORREÇÃO: Passa o horário de fechamento para validar se não ultrapassa
+    horario_fechamento_edit = None
+    if config:
+        dia_semana = agendamento.data.weekday()
+        if dia_semana == 5:  # Sábado
+            horario_fechamento_edit = time(12, 0)
+        elif dia_semana != 6:  # Não é domingo
+            if config.horario_fim_tarde:
+                try:
+                    horario_fechamento_edit = datetime.strptime(config.horario_fim_tarde, "%H:%M").time()
+                except:
+                    horario_fechamento_edit = time(18, 30)
+            else:
+                horario_fechamento_edit = time(18, 30)
+    
     horarios_livres = filtrar_conflitos(
-        slots_gerados, ocupados, duracao_necessaria=duracao_atual, buffer=10
+        slots_gerados, ocupados, duracao_necessaria=duracao_atual, buffer=10,
+        horario_fechamento=horario_fechamento_edit
     )
 
     agora_edit = datetime.now(tz_br)

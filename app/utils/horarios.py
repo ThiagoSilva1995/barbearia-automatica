@@ -188,17 +188,29 @@ def filtrar_conflitos(
     agendamentos_ocupados: List[Tuple[time, int]],
     duracao_necessaria: int,
     buffer: int = 10,
+    horario_fechamento: time = None,
 ) -> List[str]:
     """
     Filtra slots que colidem com agendamentos existentes.
+    
+    ✅ CORREÇÃO: Agora verifica se o slot + duração ultrapassa o horário de fechamento.
     """
     horarios_livres = []
     tempo_total = duracao_necessaria + buffer
+    
+    # Converter horário de fechamento para minutos (se fornecido)
+    min_fechamento = None
+    if horario_fechamento:
+        min_fechamento = _calcular_minutos(horario_fechamento)
 
     for h_str in slots_gerados:
         h_time = datetime.strptime(h_str, "%H:%M").time()
         min_inicio_novo = _calcular_minutos(h_time)
         min_fim_novo = min_inicio_novo + tempo_total
+
+        # ✅ NOVA VALIDAÇÃO: Verificar se ultrapassa o horário de fechamento
+        if min_fechamento is not None and min_fim_novo > min_fechamento:
+            continue  # Pula este slot pois ultrapassa o fechamento
 
         esta_livre = True
 
