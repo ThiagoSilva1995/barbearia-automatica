@@ -10,7 +10,7 @@ from app.models.cliente import Cliente
 import os
 
 API_KEY = os.getenv("EVOLUTION_API_KEY", "sua_chave_secreta_123")
-EVOLUTION_API_URL = "http://evolution_api:8080"
+EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "https://barbearia-whatsapp.fly.dev")
 INSTANCE_NAME = os.getenv("INSTANCE_NAME", "Barbearia_Dev")
 
 
