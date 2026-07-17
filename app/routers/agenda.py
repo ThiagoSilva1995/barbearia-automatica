@@ -26,6 +26,8 @@ from app.services.agendamento_service import (
     confirmar_pagamento_e_baixar_estoque,
 )
 
+from app.services.notificacao_service import NotificacaoService
+
 from app.utils.horarios import (
     gerar_slots_disponiveis,
     filtrar_conflitos,
@@ -178,7 +180,36 @@ async def marcar_horario_action(request: Request, db: AsyncSession = Depends(get
             hora=datetime.strptime(hora_str, "%H:%M").time(),
             servico_ids=servico_ids,
         )
-        await criar_agendamento(db, dados)
+        novo_agd = await criar_agendamento(db, dados)
+        
+        # 🔔 Criar notificação in-app para o admin
+        try:
+            # Buscar dados completos do agendamento
+            stmt_completo = (
+                select(Agendamento)
+                .options(
+                    selectinload(Agendamento.cliente),
+                    selectinload(Agendamento.barbeiro),
+                    selectinload(Agendamento.servicos),
+                )
+                .where(Agendamento.id == novo_agd.id)
+            )
+            res_completo = await db.execute(stmt_completo)
+            agd_completo = res_completo.scalars().first()
+            
+            if agd_completo:
+                servicos_nomes = [s.nome for s in agd_completo.servicos]
+                await NotificacaoService.criar_notificacao_agendamento(
+                    db=db,
+                    agendamento=agd_completo,
+                    cliente_nome=agd_completo.cliente.nome,
+                    barbeiro_nome=agd_completo.barbeiro.nome if agd_completo.barbeiro else "Equipe",
+                    servicos_nomes=servicos_nomes,
+                    acao="criado"
+                )
+        except Exception as e:
+            print(f"⚠️ Erro ao criar notificação in-app: {e}")
+        
         return RedirectResponse(
             url="/agendamentos?msg=sucesso", status_code=status.HTTP_303_SEE_OTHER
         )
@@ -197,10 +228,65 @@ async def marcar_horario_action(request: Request, db: AsyncSession = Depends(get
 async def remover_agendamento_route(
     agendamento_id: int, request: Request, db: AsyncSession = Depends(get_db)
 ):
-    if await remover_agendamento(db, agendamento_id):
-        return RedirectResponse(
-            url="/agendamentos?msg=removido", status_code=status.HTTP_303_SEE_OTHER
+    # Buscar agendamento antes de remover (para notificação)
+    stmt = (
+        select(Agendamento)
+        .options(
+            selectinload(Agendamento.cliente),
+            selectinload(Agendamento.barbeiro),
+            selectinload(Agendamento.servicos),
         )
+        .where(Agendamento.id == agendamento_id)
+    )
+    res = await db.execute(stmt)
+    agendamento = res.scalars().first()
+    
+    if agendamento:
+        cliente_nome = agendamento.cliente.nome
+        data_str = agendamento.data.strftime("%d/%m/%Y")
+        hora_str = agendamento.hora.strftime("%H:%M")
+        barbeiro_nome = agendamento.barbeiro.nome if agendamento.barbeiro else "Equipe"
+        servicos_nomes = [s.nome for s in agendamento.servicos]
+        data_iso = agendamento.data.strftime("%Y-%m-%d")
+        agendamento_id_para_notificacao = agendamento.id
+        
+        # 🔔 Criar notificação in-app de cancelamento ANTES de deletar o agendamento
+        try:
+            await NotificacaoService.criar_notificacao(
+                db=db,
+                tipo="agendamento",
+                titulo=f"❌ Agendamento Cancelado: {cliente_nome}",
+                mensagem=f"""
+❌ Agendamento cancelado pelo admin
+👤 Cliente: {cliente_nome}
+💇 Barbeiro: {barbeiro_nome}
+📅 Data: {data_str} às {hora_str}
+✂️ Serviços: {', '.join(servicos_nomes)}
+                """.strip(),
+                icone="❌",
+                cor="red",
+                link=f"/agendamentos?data={data_iso}",
+                agendamento_id=agendamento_id_para_notificacao,
+                data_agendamento=data_iso,
+                dados_extra={
+                    "cliente_nome": cliente_nome,
+                    "barbeiro_nome": barbeiro_nome,
+                    "servicos": servicos_nomes,
+                    "data": data_str,
+                    "hora": hora_str,
+                    "acao": "cancelado"
+                }
+            )
+        except Exception as e:
+            print(f"⚠️ Erro ao criar notificação de cancelamento: {e}")
+        
+        # Agora sim, deletar o agendamento
+        if await remover_agendamento(db, agendamento_id):
+            
+            return RedirectResponse(
+                url="/agendamentos?msg=removido", status_code=status.HTTP_303_SEE_OTHER
+            )
+    
     return RedirectResponse(
         url="/agendamentos?erro=Não+encontrado", status_code=status.HTTP_303_SEE_OTHER
     )
@@ -457,6 +543,35 @@ async def editar_agendamento_action(
                 )
 
         await db.commit()
+        
+        # 🔔 Criar notificação in-app de alteração
+        try:
+            # Recarregar agendamento com dados atualizados
+            stmt_atualizado = (
+                select(Agendamento)
+                .options(
+                    selectinload(Agendamento.cliente),
+                    selectinload(Agendamento.barbeiro),
+                    selectinload(Agendamento.servicos),
+                )
+                .where(Agendamento.id == agendamento_id)
+            )
+            res_atualizado = await db.execute(stmt_atualizado)
+            agd_atualizado = res_atualizado.scalars().first()
+            
+            if agd_atualizado:
+                servicos_nomes = [s.nome for s in agd_atualizado.servicos]
+                await NotificacaoService.criar_notificacao_agendamento(
+                    db=db,
+                    agendamento=agd_atualizado,
+                    cliente_nome=agd_atualizado.cliente.nome,
+                    barbeiro_nome=agd_atualizado.barbeiro.nome if agd_atualizado.barbeiro else "Equipe",
+                    servicos_nomes=servicos_nomes,
+                    acao="alterado"
+                )
+        except Exception as e:
+            print(f"⚠️ Erro ao criar notificação de alteração: {e}")
+        
         return RedirectResponse(
             url="/agendamentos?msg=Agendamento+atualizado+com+sucesso",
             status_code=status.HTTP_303_SEE_OTHER,

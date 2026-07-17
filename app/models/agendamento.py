@@ -35,6 +35,8 @@ class Agendamento(Base):
     barbeiro = relationship("Barbeiro", back_populates="agendamentos")
     servicos = relationship("Servico", secondary=agendamento_servico, back_populates="agendamentos")
     produtos = relationship("Produto", secondary=agendamento_produto, back_populates="agendamentos")
+    # Cascade delete para notificações relacionadas
+    notificacoes = relationship("Notificacao", back_populates="agendamento", cascade="all, delete-orphan")
 
     __table_args__ = (
         UniqueConstraint("barbeiro_id", "data", "hora", name="uq_barbeiro_data_hora"),

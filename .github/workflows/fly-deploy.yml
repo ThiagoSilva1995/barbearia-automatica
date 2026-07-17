@@ -1,0 +1,19 @@
+name: Fly Deploy
+on:
+  push:
+    branches:
+      - main # ou master, dependendo do seu branch principal
+
+jobs:
+  deploy:
+    name: Deploy app
+    runs-on: ubuntu-latest
+    concurrency: deploy-group # opcional: garante que apenas um deploy aconteça por vez
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      
+      - run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

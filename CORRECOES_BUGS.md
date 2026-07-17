@@ -300,6 +300,74 @@ docker compose up -d --build app
 
 ---
 
-**Relatório gerado em:** 08/07/2026  
+---
+
+## 🐛 BUG #3: Erros de Conexão com o Banco de Dados (Fly.io)
+
+### 📋 Descrição do Problema
+Logs mostravam erros frequentes:
+- `❌ Erro ao contar notificações não lidas: unexpected connection_lost() call`
+- `❌ Erro ao verificar expirações: connection was closed in the middle of operation`
+
+### 🔍 Causa Raiz
+**Arquivo:** `app/database.py`
+
+Em ambientes serverless como o Fly.io, provedores de banco de dados (ou balanceadores de carga) fecham conexões inativas silenciosamente após um período (geralmente 15-30 minutos). O pool de conexões do SQLAlchemy tentava reutilizar essas conexões "mortas", resultando em erros.
+
+### ✅ Solução Implementada
+Adicionado `pool_recycle=1800` (30 minutos) e ajustado o tamanho do pool para lidar melhor com picos:
+
+```python
+engine = create_async_engine(
+    DATABASE_URL,
+    echo=False,
+    pool_pre_ping=True,      # Garante que a conexão está viva antes de usar
+    pool_recycle=1800,       # Recicla conexões a cada 30 min (evita conexões mortas no Fly.io)
+    pool_size=10,            # Aumentado para lidar melhor com picos de requisições
+    max_overflow=20,         # Permite mais conexões sob demanda
+)
+```
+
+---
+
+## 🐛 BUG #4: Erro ao Deletar Agendamento (Foreign Key Constraint)
+
+### 📋 Descrição do Problema
+Ao tentar remover um agendamento, o sistema retornava o erro:
+`DETAIL: Key (id)=(1) is still referenced from table "notificacoes".`
+
+### 🔍 Causa Raiz
+**Arquivos:** `app/models/agendamento.py` e `app/models/notificacao.py`
+
+O modelo `Notificacao` possui uma chave estrangeira (`agendamento_id`) apontando para `Agendamento`, mas não estava configurado para deletar em cascata (`CASCADE`). O PostgreSQL bloqueava a exclusão do agendamento para preservar a integridade referencial.
+
+### ✅ Solução Implementada
+
+1. **No modelo `Notificacao` (`app/models/notificacao.py`):**
+   - Adicionado `ondelete="CASCADE"` na ForeignKey.
+   - Adicionado o relacionamento inverso `agendamento = relationship("Agendamento", back_populates="notificacoes")`.
+
+2. **No modelo `Agendamento` (`app/models/agendamento.py`):**
+   - Adicionado `notificacoes = relationship("Notificacao", back_populates="agendamento", cascade="all, delete-orphan")`.
+
+3. **Migração do Banco de Dados:**
+   - Criado o script `migrar_cascade_notificacoes.py` para aplicar a restrição `ON DELETE CASCADE` no banco de dados PostgreSQL existente, pois o `create_all` do SQLAlchemy não altera constraints já criadas.
+
+### 🚀 Como Aplicar a Correção no Banco de Dados
+
+Execute o script de migração no seu ambiente:
+```bash
+python migrar_cascade_notificacoes.py
+```
+
+Ou conecte-se manualmente ao banco no Fly.io e execute:
+```sql
+ALTER TABLE notificacoes DROP CONSTRAINT IF EXISTS notificacoes_agendamento_id_fkey;
+ALTER TABLE notificacoes ADD CONSTRAINT notificacoes_agendamento_id_fkey FOREIGN KEY (agendamento_id) REFERENCES agendamentos(id) ON DELETE CASCADE;
+```
+
+---
+
+**Relatório gerado em:** 17/07/2026  
 **Desenvolvedor:** Sistema de IA  
 **Status:** ✅ **CORREÇÕES APLICADAS COM SUCESSO**

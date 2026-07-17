@@ -19,6 +19,7 @@ from app.services.agendamento_service import (
 from app.utils.horarios import gerar_slots_disponiveis, filtrar_conflitos
 from app.utils.phone_utils import normalize_phone_for_search
 from app.services import whatsapp_service
+from app.services.notificacao_service import NotificacaoService
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -214,6 +215,34 @@ async def area_cliente_confirmar(request: Request, db: AsyncSession = Depends(ge
             await enviar_notificacoes_agendamento(novo_agd.id)
         except Exception as e:
             print(f"⚠️ Erro ao enviar WhatsApp: {e}")
+
+        # 🔔 Criar notificação in-app para o admin
+        try:
+            # Buscar dados completos do agendamento
+            stmt_completo = (
+                select(Agendamento)
+                .options(
+                    selectinload(Agendamento.cliente),
+                    selectinload(Agendamento.barbeiro),
+                    selectinload(Agendamento.servicos),
+                )
+                .where(Agendamento.id == novo_agd.id)
+            )
+            res_completo = await db.execute(stmt_completo)
+            agd_completo = res_completo.scalars().first()
+            
+            if agd_completo:
+                servicos_nomes = [s.nome for s in agd_completo.servicos]
+                await NotificacaoService.criar_notificacao_agendamento(
+                    db=db,
+                    agendamento=agd_completo,
+                    cliente_nome=agd_completo.cliente.nome,
+                    barbeiro_nome=agd_completo.barbeiro.nome if agd_completo.barbeiro else "Equipe",
+                    servicos_nomes=servicos_nomes,
+                    acao="criado"
+                )
+        except Exception as e:
+            print(f"⚠️ Erro ao criar notificação in-app: {e}")
 
         return RedirectResponse(
             url="/cliente/meus-agendamentos?msg=Agendamento+realizado!", status_code=303
@@ -486,6 +515,34 @@ async def cliente_editar_agendamento_action(
 
         await db.commit()
 
+        # 🔔 Criar notificação in-app de alteração
+        try:
+            # Recarregar agendamento com dados atualizados
+            stmt_atualizado = (
+                select(Agendamento)
+                .options(
+                    selectinload(Agendamento.cliente),
+                    selectinload(Agendamento.barbeiro),
+                    selectinload(Agendamento.servicos),
+                )
+                .where(Agendamento.id == agendamento_id)
+            )
+            res_atualizado = await db.execute(stmt_atualizado)
+            agd_atualizado = res_atualizado.scalars().first()
+            
+            if agd_atualizado:
+                novos_servicos_nomes = [s.nome for s in agd_atualizado.servicos]
+                await NotificacaoService.criar_notificacao_agendamento(
+                    db=db,
+                    agendamento=agd_atualizado,
+                    cliente_nome=agd_atualizado.cliente.nome,
+                    barbeiro_nome=agd_atualizado.barbeiro.nome if agd_atualizado.barbeiro else "Equipe",
+                    servicos_nomes=novos_servicos_nomes,
+                    acao="alterado"
+                )
+        except Exception as e:
+            print(f"⚠️ Erro ao criar notificação de alteração: {e}")
+
         # 📤 ENVIAR NOTIFICAÇÃO DE ALTERAÇÃO (Background)
         data_nova = nova_data.strftime("%d/%m/%Y")
         hora_nova = nova_hora.strftime("%H:%M")
@@ -545,7 +602,40 @@ async def cliente_cancelar_agendamento(
         hora_str = agendamento.hora.strftime("%H:%M")
         barbeiro_nome = agendamento.barbeiro.nome if agendamento.barbeiro else "Equipe"
         servicos_nomes = [s.nome for s in agendamento.servicos]
+        data_iso = agendamento.data.strftime("%Y-%m-%d")
+        agendamento_id_para_notificacao = agendamento.id
 
+        # 🔔 Criar notificação in-app de cancelamento ANTES de deletar o agendamento
+        try:
+            await NotificacaoService.criar_notificacao(
+                db=db,
+                tipo="agendamento",
+                titulo=f"❌ Agendamento Cancelado: {cliente_nome}",
+                mensagem=f"""
+❌ Agendamento cancelado pelo cliente
+👤 Cliente: {cliente_nome}
+💇 Barbeiro: {barbeiro_nome}
+📅 Data: {data_str} às {hora_str}
+✂️ Serviços: {', '.join(servicos_nomes)}
+                """.strip(),
+                icone="❌",
+                cor="red",
+                link=f"/agendamentos?data={data_iso}",
+                agendamento_id=agendamento_id_para_notificacao,
+                data_agendamento=data_iso,
+                dados_extra={
+                    "cliente_nome": cliente_nome,
+                    "barbeiro_nome": barbeiro_nome,
+                    "servicos": servicos_nomes,
+                    "data": data_str,
+                    "hora": hora_str,
+                    "acao": "cancelado"
+                }
+            )
+        except Exception as e:
+            print(f"⚠️ Erro ao criar notificação de cancelamento: {e}")
+
+        # Agora sim, deletar o agendamento
         await db.delete(agendamento)
         await db.commit()
 

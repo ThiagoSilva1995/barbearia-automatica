@@ -321,26 +321,35 @@ class FilaInteligenteService:
         Verifica filas expiradas e passa para o próximo cliente
         ← CRIA SUA PRÓPRIA SESSÃO (não recebe db como parâmetro)
         """
-        async with AsyncSessionLocal() as db:  # ← Cria sessão interna
-            try:
-                stmt = select(FilaEspera).where(
-                    and_(
-                        FilaEspera.status == "aguardando",
-                        FilaEspera.expira_em < datetime.now(),
+        try:
+            # Cria uma nova sessão a cada execução para evitar conexões mortas do pool
+            async with AsyncSessionLocal() as db:
+                try:
+                    stmt = select(FilaEspera).where(
+                        and_(
+                            FilaEspera.status == "aguardando",
+                            FilaEspera.expira_em < datetime.now(),
+                        )
                     )
-                )
 
-                result = await db.execute(stmt)
-                filas_expiradas = result.scalars().all()
+                    result = await db.execute(stmt)
+                    filas_expiradas = result.scalars().all()
 
-                logger.info(
-                    f"🔍 Verificando {len(filas_expiradas)} fila(s) expirada(s)"
-                )
+                    logger.info(
+                        f"🔍 Verificando {len(filas_expiradas)} fila(s) expirada(s)"
+                    )
 
-                for fila in filas_expiradas:
-                    logger.info(f"⏰ Fila {fila.id} expirada, processando recusa")
-                    await self._processar_recusa(db, fila)
+                    for fila in filas_expiradas:
+                        logger.info(f"⏰ Fila {fila.id} expirada, processando recusa")
+                        await self._processar_recusa(db, fila)
 
-            except Exception as e:
-                logger.error(f"❌ Erro ao verificar expirações: {e}")
-                await db.rollback()
+                except Exception as e:
+                    logger.error(f"❌ Erro ao verificar expirações: {e}")
+                    # Não faz rollback se a conexão já foi perdida
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
+        except Exception as e:
+            # Captura erros de criação de sessão (ex: pool esgotado)
+            logger.error(f"❌ Erro crítico ao criar sessão para verificar expirações: {e}")

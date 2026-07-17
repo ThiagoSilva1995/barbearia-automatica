@@ -99,7 +99,9 @@
             <tbody class="bg-white divide-y divide-gray-200">
                 {% if agendamentos %}
                 {% for agd in agendamentos %}
-                <tr class="hover:bg-gray-50 transition">
+                {# ✅ Destaque visual para agendamento vindo da notificação #}
+                {% set is_destaque = request.query_params.get('destaque') and request.query_params.get('destaque')|int == agd.id %}
+                <tr class="hover:bg-gray-50 transition {% if is_destaque %}bg-yellow-50 border-l-4 border-yellow-400{% endif %}" {% if is_destaque %}id="agendamento-destaque"{% endif %}>
                     <!-- ✅ COLUNA HORÁRIO: Centralizado e sem data -->
                     <td class="px-6 py-4 whitespace-nowrap text-center">
                         <div
@@ -188,5 +190,30 @@
             alert('❌ Erro: ' + err.message);
         }
     }
+    
+    // ✅ Destacar agendamento vindo da notificação
+    document.addEventListener('DOMContentLoaded', function() {
+        const destaque = document.getElementById('agendamento-destaque');
+        if (destaque) {
+            // Scroll até o agendamento destacado
+            destaque.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            
+            // Animação de pulse por 5 segundos
+            destaque.style.transition = 'background-color 0.5s';
+            let count = 0;
+            const interval = setInterval(() => {
+                if (count % 2 === 0) {
+                    destaque.style.backgroundColor = '#fef3c7'; // Amarelo claro
+                } else {
+                    destaque.style.backgroundColor = '#fef9c3'; // Amarelo muito claro
+                }
+                count++;
+                if (count >= 10) {
+                    clearInterval(interval);
+                    destaque.style.backgroundColor = '#fefce8'; // Amarelo permanente
+                }
+            }, 500);
+        }
+    });
 </script>
 {% endblock %}

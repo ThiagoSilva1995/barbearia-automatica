@@ -195,11 +195,21 @@ async def loop_de_verificacao(db_session_maker):
     print("🤖 Robô de Lembretes e Aniversários Iniciado...")
     while True:
         try:
+            # Cria uma nova sessão a cada execução para evitar conexões mortas do pool
             async with db_session_maker() as db:
-                await verificar_e_enviar_aniversariantes(db)
-                await verificar_e_enviar_lembretes_agendamento(db)
+                try:
+                    await verificar_e_enviar_aniversariantes(db)
+                    await verificar_e_enviar_lembretes_agendamento(db)
+                except Exception as e:
+                    print(f"❌ Erro ao executar tarefas de fundo: {e}")
+                    # Não faz rollback se a conexão já foi perdida
+                    try:
+                        await db.rollback()
+                    except Exception:
+                        pass
         except Exception as e:
-            print(f"❌ Erro no loop de fundo: {e}")
+            # Captura erros de criação de sessão (ex: pool esgotado)
+            print(f"❌ Erro crítico ao criar sessão no loop de fundo: {e}")
 
         # Espera 60 segundos
         await asyncio.sleep(60)

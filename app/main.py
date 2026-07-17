@@ -13,6 +13,7 @@ from app.routers import (
     fila_espera,
     api_clientes,
     api_agendamentos,
+    notificacoes,  # ← NOVO: Router de notificações in-app
 )
 from app.services.reminder_service import loop_de_verificacao
 from app.services.fila_inteligente_service import FilaInteligenteService
@@ -189,6 +190,7 @@ app.include_router(relatorios.router)
 app.include_router(cliente_publico.router)
 app.include_router(admin_config.router)
 app.include_router(fila_espera.router)
+app.include_router(notificacoes.router)  # ← NOVO: Notificações in-app
 
 # Incluir routers de API REST
 app.include_router(api_clientes.router)
@@ -229,4 +231,6 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    import os
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=False)
