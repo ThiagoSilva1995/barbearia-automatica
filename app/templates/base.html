@@ -210,6 +210,64 @@
         btn.addEventListener('click', () => {
             menu.classList.toggle('hidden');
         });
+
+        // 🔄 Estados de Carregamento (Loading) em Botões de Submit
+        // Previne cliques múltiplos e duplicidade de ações
+        document.addEventListener('submit', function(e) {
+            const form = e.target;
+            const submitBtn = form.querySelector('button[type="submit"]') || form.querySelector('input[type="submit"]');
+            
+            if (submitBtn && !submitBtn.disabled) {
+                // Salva o texto original
+                const originalText = submitBtn.innerHTML;
+                const originalClasses = submitBtn.className;
+                
+                // Desabilita o botão
+                submitBtn.disabled = true;
+                
+                // Adiciona estado de loading visual
+                submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Processando...';
+                submitBtn.classList.add('opacity-75', 'cursor-not-allowed');
+                
+                // Se for um link que age como submit (ex: alguns forms customizados), restaura após 3s por segurança
+                setTimeout(() => {
+                    if (submitBtn.disabled) {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = originalText;
+                        submitBtn.className = originalClasses;
+                    }
+                }, 5000);
+            }
+        });
+
+        // Também aplica loading em botões de ação críticos (ex: confirmar pagamento, excluir)
+        document.addEventListener('click', function(e) {
+            const btn = e.target.closest('button') || e.target.closest('a');
+            if (!btn) return;
+            
+            // Verifica se é um botão de ação crítica (tem classe de perigo ou é um link de ação)
+            const isCriticalAction = btn.classList.contains('btn-danger') || 
+                                     btn.classList.contains('bg-red-600') ||
+                                     btn.href?.includes('remover') ||
+                                     btn.href?.includes('confirmar');
+            
+            if (isCriticalAction && !btn.disabled && !btn.classList.contains('opacity-75')) {
+                // Não desabilitar se tiver onclick com confirm() que pode cancelar
+                if (btn.getAttribute('onclick')?.includes('confirm')) return;
+                
+                const originalText = btn.innerHTML;
+                btn.disabled = true;
+                btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+                btn.classList.add('opacity-75', 'cursor-not-allowed');
+                
+                // Restaura após 3 segundos por segurança
+                setTimeout(() => {
+                    btn.disabled = false;
+                    btn.innerHTML = originalText;
+                    btn.classList.remove('opacity-75', 'cursor-not-allowed');
+                }, 3000);
+            }
+        });
     </script>
 
     <!-- 🔔 Script de Notificações In-App -->

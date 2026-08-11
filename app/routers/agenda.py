@@ -25,8 +25,11 @@ from app.services.agendamento_service import (
     remover_agendamento,
     confirmar_pagamento_e_baixar_estoque,
 )
+from app.services.auditoria_service import registrar_auditoria
 
 from app.services.notificacao_service import NotificacaoService
+from app.services import whatsapp_service
+import asyncio
 
 from app.utils.horarios import (
     gerar_slots_disponiveis,
@@ -207,8 +210,54 @@ async def marcar_horario_action(request: Request, db: AsyncSession = Depends(get
                     servicos_nomes=servicos_nomes,
                     acao="criado"
                 )
+                
+                # 🔍 Registrar auditoria
+                await registrar_auditoria(
+                    db=db,
+                    acao="criado",
+                    agendamento=agd_completo,
+                    usuario_tipo="admin",
+                    usuario_nome="Admin",
+                    ip_origem=request.client.host if request.client else None
+                )
+                
+                # 📤 ENVIAR NOTIFICAÇÃO WHATSAPP (Background)
+                try:
+                    stmt_cfg = select(Configuracao).limit(1)
+                    cfg = (await db.execute(stmt_cfg)).scalars().first()
+                    tel_barbearia = cfg.telefone_barbearia if cfg else None
+                    
+                    servicos_nomes = [s.nome for s in agd_completo.servicos]
+                    data_str = agd_completo.data.strftime("%d/%m/%Y")
+                    hora_str = agd_completo.hora.strftime("%H:%M")
+                    barbeiro_nome = agd_completo.barbeiro.nome if agd_completo.barbeiro else "Equipe"
+                    
+                    # 1. Enviar para a barbearia
+                    if tel_barbearia:
+                        msg_barb = whatsapp_service.gerar_mensagem_novo_agendamento(
+                            agd_completo.cliente.nome,
+                            servicos_nomes,
+                            data_str,
+                            hora_str,
+                            barbeiro_nome,
+                        )
+                        asyncio.create_task(whatsapp_service.enviar_mensagem_automatica(tel_barbearia, msg_barb))
+                    
+                    # 2. Enviar para o cliente
+                    msg_cliente = whatsapp_service.gerar_mensagem_confirmacao_cliente(
+                        agd_completo.cliente.nome.split()[0],
+                        data_str,
+                        hora_str,
+                        barbeiro_nome,
+                        servicos_nomes,
+                    )
+                    asyncio.create_task(whatsapp_service.enviar_mensagem_automatica(agd_completo.cliente.telefone, msg_cliente))
+                    
+                except Exception as e:
+                    print(f"⚠️ Erro ao enviar WhatsApp de novo agendamento (admin): {e}")
+                    
         except Exception as e:
-            print(f"⚠️ Erro ao criar notificação in-app: {e}")
+            print(f"⚠️ Erro ao criar notificação/auditoria in-app: {e}")
         
         return RedirectResponse(
             url="/agendamentos?msg=sucesso", status_code=status.HTTP_303_SEE_OTHER
@@ -282,6 +331,18 @@ async def remover_agendamento_route(
         
         # Agora sim, deletar o agendamento
         if await remover_agendamento(db, agendamento_id):
+            # 🔍 Registrar auditoria de remoção
+            try:
+                await registrar_auditoria(
+                    db=db,
+                    acao="removido",
+                    agendamento=agendamento,
+                    usuario_tipo="admin",
+                    usuario_nome="Admin",
+                    ip_origem=request.client.host if request.client else None
+                )
+            except Exception as e:
+                print(f"⚠️ Erro ao registrar auditoria de remoção: {e}")
             
             return RedirectResponse(
                 url="/agendamentos?msg=removido", status_code=status.HTTP_303_SEE_OTHER
@@ -569,8 +630,18 @@ async def editar_agendamento_action(
                     servicos_nomes=servicos_nomes,
                     acao="alterado"
                 )
+                
+                # 🔍 Registrar auditoria
+                await registrar_auditoria(
+                    db=db,
+                    acao="editado",
+                    agendamento=agd_atualizado,
+                    usuario_tipo="admin",
+                    usuario_nome="Admin",
+                    ip_origem=request.client.host if request.client else None
+                )
         except Exception as e:
-            print(f"⚠️ Erro ao criar notificação de alteração: {e}")
+            print(f"⚠️ Erro ao criar notificação/auditoria de alteração: {e}")
         
         return RedirectResponse(
             url="/agendamentos?msg=Agendamento+atualizado+com+sucesso",

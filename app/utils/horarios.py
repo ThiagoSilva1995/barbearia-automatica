@@ -43,7 +43,10 @@ def _gerar_periodo_slots(data_alvo: date, inicio: time, fim: time, passo_minutos
     atual = datetime.combine(data_alvo, inicio)
     fim_dt = datetime.combine(data_alvo, fim)
 
-    while atual <= fim_dt:
+    # ✅ CORREÇÃO: Usar < em vez de <= para NÃO gerar o slot exato de fechamento
+    # Ex: Se fecha às 12:00, não gera o slot "12:00" pois um agendamento
+    # começando nesse horário ultrapassaria o fechamento
+    while atual < fim_dt:
         slots.append(atual.strftime("%H:%M"))
         atual += timedelta(minutes=passo_minutos)
 
@@ -208,7 +211,8 @@ def filtrar_conflitos(
         min_inicio_novo = _calcular_minutos(h_time)
         min_fim_novo = min_inicio_novo + tempo_total
 
-        # ✅ NOVA VALIDAÇÃO: Verificar se ultrapassa o horário de fechamento
+        # ✅ VALIDAÇÃO: Verificar se ultrapassa o horário de fechamento
+        # Usa >= em vez de > para garantir que o serviço termine ANTES ou EXATAMENTE no fechamento
         if min_fechamento is not None and min_fim_novo > min_fechamento:
             continue  # Pula este slot pois ultrapassa o fechamento
 

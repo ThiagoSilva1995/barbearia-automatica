@@ -13,24 +13,19 @@ from app.routers import (
     fila_espera,
     api_clientes,
     api_agendamentos,
-    notificacoes,  # ← NOVO: Router de notificações in-app
+    notificacoes,
+    auditoria,  # ← NOVO: Router de auditoria
 )
 from app.services.reminder_service import loop_de_verificacao
 from app.services.fila_inteligente_service import FilaInteligenteService
+from app.core.logging_config import setup_logging
 import os
 import asyncio
 import logging
 from datetime import datetime
 
-# Configuração básica de logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-    ],
-)
-
+# Configurar logging ANTES de tudo
+setup_logging()
 logger = logging.getLogger(__name__)
 
 
@@ -190,7 +185,8 @@ app.include_router(relatorios.router)
 app.include_router(cliente_publico.router)
 app.include_router(admin_config.router)
 app.include_router(fila_espera.router)
-app.include_router(notificacoes.router)  # ← NOVO: Notificações in-app
+app.include_router(notificacoes.router)
+app.include_router(auditoria.router)  # ← NOVO: Auditoria de agendamentos
 
 # Incluir routers de API REST
 app.include_router(api_clientes.router)

@@ -16,6 +16,7 @@ from app.services.agendamento_service import (
     criar_agendamento,
     verificar_disponibilidade,
 )
+from app.services.auditoria_service import registrar_auditoria
 from app.utils.horarios import gerar_slots_disponiveis, filtrar_conflitos
 from app.utils.phone_utils import normalize_phone_for_search
 from app.services import whatsapp_service
@@ -638,6 +639,20 @@ async def cliente_cancelar_agendamento(
         # Agora sim, deletar o agendamento
         await db.delete(agendamento)
         await db.commit()
+        
+        # 🔍 Registrar auditoria de cancelamento pelo cliente
+        try:
+            await registrar_auditoria(
+                db=db,
+                acao="cancelado_cliente",
+                agendamento=agendamento,
+                usuario_tipo="cliente",
+                usuario_id=cliente_id,
+                usuario_nome=cliente_nome,
+                ip_origem=request.client.host if request.client else None
+            )
+        except Exception as e:
+            print(f"⚠️ Erro ao registrar auditoria de cancelamento: {e}")
 
         try:
             msg = whatsapp_service.gerar_mensagem_cancelamento(
