@@ -514,24 +514,27 @@ async def editar_agendamento_form(
     ocupados = ocupados_res.all()
 
     # 3. Filtra
-    # ✅ CORREÇÃO: Passa o horário de fechamento para validar se não ultrapassa
-    horario_fechamento_admin = None
+    # ✅ CORREÇÃO: Passa os horários de ambos os períodos (manhã e tarde) para validar corretamente
+    horario_fim_manha_admin = None
+    horario_inicio_tarde_admin = None
+    horario_fim_tarde_admin = None
+    
     if config:
-        dia_semana = agd.data.weekday()
-        if dia_semana == 5:  # Sábado
-            horario_fechamento_admin = time(12, 0)
-        elif dia_semana != 6:  # Não é domingo
+        try:
+            if config.horario_fim_manha:
+                horario_fim_manha_admin = datetime.strptime(config.horario_fim_manha, "%H:%M").time()
+            if config.horario_inicio_tarde:
+                horario_inicio_tarde_admin = datetime.strptime(config.horario_inicio_tarde, "%H:%M").time()
             if config.horario_fim_tarde:
-                try:
-                    horario_fechamento_admin = datetime.strptime(config.horario_fim_tarde, "%H:%M").time()
-                except:
-                    horario_fechamento_admin = time(18, 30)
-            else:
-                horario_fechamento_admin = time(18, 30)
+                horario_fim_tarde_admin = datetime.strptime(config.horario_fim_tarde, "%H:%M").time()
+        except (ValueError, TypeError):
+            pass
     
     horarios_livres = filtrar_conflitos(
         slots_gerados, ocupados, duracao_necessaria=duracao_atual, buffer=10,
-        horario_fechamento=horario_fechamento_admin
+        horario_fim_manha=horario_fim_manha_admin,
+        horario_inicio_tarde=horario_inicio_tarde_admin,
+        horario_fim_tarde=horario_fim_tarde_admin,
     )
 
     clientes_res = await db.execute(select(Cliente).order_by(Cliente.nome))

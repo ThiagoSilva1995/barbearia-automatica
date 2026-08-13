@@ -136,26 +136,32 @@ async def area_cliente_agendar(request: Request, db: AsyncSession = Depends(get_
     ocupados = ocupados_res.all()  # Lista de tuplas (time, int)
 
     # 3. Filtra conflitos usando a duração real do serviço selecionado + buffer de 10min
-    # ✅ CORREÇÃO: Passa o horário de fechamento para validar se não ultrapassa
-    horario_fechamento = None
+    # ✅ CORREÇÃO: Passa os horários de ambos os períodos (manhã e tarde) para validar corretamente
+    # Agora slots no final da manhã que ultrapassam 12:00 são bloqueados (ex: 11:50 + 55min = 12:45)
+    
+    # Extrair horários de fechamento da config para passar para filtrar_conflitos
+    horario_fim_manha = None
+    horario_inicio_tarde = None
+    horario_fim_tarde = None
+    
     if config:
-        # Determinar horário de fechamento baseado no dia da semana
-        dia_semana = data_selecionada.weekday()
-        if dia_semana == 5:  # Sábado
-            horario_fechamento = time(12, 0)
-        elif dia_semana != 6:  # Não é domingo
-            # Usa o fim da tarde configurado
+        try:
+            if config.horario_fim_manha:
+                horario_fim_manha = datetime.strptime(config.horario_fim_manha, "%H:%M").time()
+            if config.horario_inicio_tarde:
+                horario_inicio_tarde = datetime.strptime(config.horario_inicio_tarde, "%H:%M").time()
             if config.horario_fim_tarde:
-                try:
-                    horario_fechamento = datetime.strptime(config.horario_fim_tarde, "%H:%M").time()
-                except:
-                    horario_fechamento = time(18, 30)
-            else:
-                horario_fechamento = time(18, 30)
+                horario_fim_tarde = datetime.strptime(config.horario_fim_tarde, "%H:%M").time()
+        except (ValueError, TypeError):
+            pass
     
     horarios_livres = filtrar_conflitos(
-        slots_gerados, ocupados, duracao_necessaria=duracao_total, buffer=10,
-        horario_fechamento=horario_fechamento
+        slots_gerados, ocupados, 
+        duracao_necessaria=duracao_total, 
+        buffer=10,
+        horario_fim_manha=horario_fim_manha,
+        horario_inicio_tarde=horario_inicio_tarde,
+        horario_fim_tarde=horario_fim_tarde,
     )
 
     # ✅ Obter horário selecionado (para manter marcado)
@@ -350,24 +356,32 @@ async def cliente_editar_agendamento(
     ocupados = ocupados_res.all()
 
     # 3. Filtra
-    # ✅ CORREÇÃO: Passa o horário de fechamento para validar se não ultrapassa
-    horario_fechamento_edit = None
+    # ✅ CORREÇÃO: Passa os horários de ambos os períodos (manhã e tarde) para validar corretamente
+    # Agora slots no final da manhã que ultrapassam 12:00 são bloqueados (ex: 11:50 + 55min = 12:45)
+    
+    # Extrair horários de fechamento da config para passar para filtrar_conflitos
+    horario_fim_manha = None
+    horario_inicio_tarde = None
+    horario_fim_tarde = None
+    
     if config:
-        dia_semana = agendamento.data.weekday()
-        if dia_semana == 5:  # Sábado
-            horario_fechamento_edit = time(12, 0)
-        elif dia_semana != 6:  # Não é domingo
+        try:
+            if config.horario_fim_manha:
+                horario_fim_manha = datetime.strptime(config.horario_fim_manha, "%H:%M").time()
+            if config.horario_inicio_tarde:
+                horario_inicio_tarde = datetime.strptime(config.horario_inicio_tarde, "%H:%M").time()
             if config.horario_fim_tarde:
-                try:
-                    horario_fechamento_edit = datetime.strptime(config.horario_fim_tarde, "%H:%M").time()
-                except:
-                    horario_fechamento_edit = time(18, 30)
-            else:
-                horario_fechamento_edit = time(18, 30)
+                horario_fim_tarde = datetime.strptime(config.horario_fim_tarde, "%H:%M").time()
+        except (ValueError, TypeError):
+            pass
     
     horarios_livres = filtrar_conflitos(
-        slots_gerados, ocupados, duracao_necessaria=duracao_atual, buffer=10,
-        horario_fechamento=horario_fechamento_edit
+        slots_gerados, ocupados, 
+        duracao_necessaria=duracao_atual, 
+        buffer=10,
+        horario_fim_manha=horario_fim_manha,
+        horario_inicio_tarde=horario_inicio_tarde,
+        horario_fim_tarde=horario_fim_tarde,
     )
 
     agora_edit = datetime.now(tz_br)
@@ -650,22 +664,18 @@ async def cliente_cancelar_agendamento(
         except Exception as e:
             print(f"⚠️ Erro ao registrar auditoria de cancelamento: {e}")
 
+        # 📤 ENVIAR NOTIFICAÇÕES DE CANCELAMENTO POR WHATSAPP
+        # ✅ CORREÇÃO: Dispara para barbearia E cliente (como faz no novo agendamento e edição)
         try:
-            msg = whatsapp_service.gerar_mensagem_cancelamento(
+            await enviar_notificacoes_cancelamento(
                 cliente_nome=cliente_nome,
+                cliente_telefone=None,  # Busca da sessão temporária
                 data_str=data_str,
                 hora_str=hora_str,
                 barbeiro_nome=barbeiro_nome,
                 servicos_nomes=servicos_nomes,
+                cliente_id=cliente_id,
             )
-
-            stmt_cfg = select(Configuracao).limit(1)
-            cfg = (await db.execute(stmt_cfg)).scalars().first()
-            if cfg and cfg.telefone_barbearia:
-                asyncio.create_task(
-                    whatsapp_service.enviar_mensagem_automatica(cfg.telefone_barbearia, msg)
-                )
-
         except Exception as e:
             print(f"⚠️ Erro ao enviar WhatsApp de cancelamento: {e}")
 
@@ -794,6 +804,60 @@ async def enviar_notificacoes_alteracao(
 
     except Exception as e:
         print(f"⚠️ Erro ao enviar notificação de alteração: {e}")
+
+
+async def enviar_notificacoes_cancelamento(
+    cliente_nome: str,
+    cliente_telefone: str,
+    data_str: str,
+    hora_str: str,
+    barbeiro_nome: str,
+    servicos_nomes: list,
+    cliente_id: int,
+):
+    """Envia notificação de cancelamento para barbearia e cliente usando sessão própria."""
+    try:
+        async with AsyncSessionLocal() as db_temp:
+            # Buscar telefone do cliente se não foi passado
+            if not cliente_telefone:
+                stmt_cliente = select(Cliente).where(Cliente.id == cliente_id)
+                res_cliente = await db_temp.execute(stmt_cliente)
+                cliente = res_cliente.scalars().first()
+                cliente_telefone = cliente.telefone if cliente else None
+
+            stmt_cfg = select(Configuracao).limit(1)
+            cfg = (await db_temp.execute(stmt_cfg)).scalars().first()
+            tel_barbearia = cfg.telefone_barbearia if cfg else None
+
+            # 1. Enviar para a BARBEARIA (avisando que o cliente cancelou)
+            if tel_barbearia:
+                msg_barb = whatsapp_service.gerar_mensagem_cancelamento(
+                    cliente_nome=cliente_nome,
+                    data_str=data_str,
+                    hora_str=hora_str,
+                    barbeiro_nome=barbeiro_nome,
+                    servicos_nomes=servicos_nomes,
+                )
+                await whatsapp_service.enviar_mensagem_automatica(tel_barbearia, msg_barb)
+
+            # 2. Enviar para o CLIENTE (confirmando que ele cancelou)
+            if cliente_telefone:
+                primeiro_nome = cliente_nome.split()[0]
+                servicos_str = ", ".join(servicos_nomes)
+                msg_cliente = (
+                    f"❌ *AGENDAMENTO CANCELADO* ❌\n\n"
+                    f"Olá, *{primeiro_nome}*! Seu agendamento foi cancelado com sucesso.\n\n"
+                    f"✂️ *Serviços:* {servicos_str}\n"
+                    f"📅 *Data:* {data_str}\n"
+                    f"⏰ *Horário:* {hora_str}\n"
+                    f"💇 *Barbeiro:* {barbeiro_nome}\n\n"
+                    f"Esperamos te ver em breve! 💈✨\n"
+                    f"Se precisar remarcar, é só acessar nosso sistema novamente."
+                )
+                await whatsapp_service.enviar_mensagem_automatica(cliente_telefone, msg_cliente)
+
+    except Exception as e:
+        print(f"⚠️ Erro ao enviar notificação de cancelamento: {e}")
 
 
 @router.get("/cliente/sair")
