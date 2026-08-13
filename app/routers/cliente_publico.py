@@ -549,25 +549,16 @@ async def cliente_editar_agendamento_action(
         except Exception as e:
             print(f"⚠️ Erro ao criar notificação de alteração: {e}")
 
-        # 📤 ENVIAR NOTIFICAÇÃO DE ALTERAÇÃO (Background)
-        data_nova = nova_data.strftime("%d/%m/%Y")
-        hora_nova = nova_hora.strftime("%H:%M")
-
-        msg = whatsapp_service.gerar_mensagem_alteracao_agendamento(
-            cliente_nome=cliente_nome,
-            data_antiga=data_antiga,
-            hora_antiga=hora_antiga,
-            data_nova=data_nova,
-            hora_nova=hora_nova,
-            servicos_nomes=servicos_nomes_antigos,  # Envia os nomes antigos ou novos, conforme preferência
-        )
-
-        stmt_cfg = select(Configuracao).limit(1)
-        cfg = (await db.execute(stmt_cfg)).scalars().first()
-        if cfg and cfg.telefone_barbearia:
-            asyncio.create_task(
-                whatsapp_service.enviar_mensagem_automatica(cfg.telefone_barbearia, msg)
+        # 📤 ENVIAR NOTIFICAÇÃO DE ALTERAÇÃO POR WHATSAPP
+        # ✅ CORREÇÃO: Dispara para barbearia E cliente (como faz no novo agendamento)
+        try:
+            await enviar_notificacoes_alteracao(
+                agendamento_id=agendamento_id,
+                data_antiga=data_antiga,
+                hora_antiga=hora_antiga,
             )
+        except Exception as e:
+            print(f"⚠️ Erro ao enviar WhatsApp de alteração: {e}")
 
         return RedirectResponse(
             url="/cliente/meus-agendamentos?msg=Agendamento+atualizado+com+sucesso!",
@@ -736,6 +727,73 @@ async def enviar_notificacoes_agendamento(agendamento_id: int):
 
     except Exception as e:
         print(f"⚠️ Erro ao enviar notificação de agendamento: {e}")
+
+
+async def enviar_notificacoes_alteracao(
+    agendamento_id: int,
+    data_antiga: str,
+    hora_antiga: str,
+):
+    """Envia notificação de alteração para barbearia e cliente usando sessão própria."""
+    try:
+        async with AsyncSessionLocal() as db_temp:
+            stmt = (
+                select(Agendamento)
+                .options(
+                    selectinload(Agendamento.cliente),
+                    selectinload(Agendamento.barbeiro),
+                    selectinload(Agendamento.servicos),
+                )
+                .where(Agendamento.id == agendamento_id)
+            )
+            res = await db_temp.execute(stmt)
+            agd = res.scalars().first()
+            if not agd:
+                print("⚠️ Agendamento não encontrado para envio de notificação de alteração")
+                return
+
+            stmt_cfg = select(Configuracao).limit(1)
+            cfg = (await db_temp.execute(stmt_cfg)).scalars().first()
+            tel_barbearia = cfg.telefone_barbearia if cfg else None
+
+            # Dados ATUALIZADOS do agendamento
+            servicos_nomes_novos = [s.nome for s in agd.servicos]
+            data_nova_str = agd.data.strftime("%d/%m/%Y")
+            hora_nova_str = agd.hora.strftime("%H:%M")
+            cliente_nome = agd.cliente.nome
+            barbeiro_nome = agd.barbeiro.nome if agd.barbeiro else "Equipe"
+            cliente_telefone = agd.cliente.telefone
+
+            # 1. Enviar para a BARBEARIA (avisando que o cliente alterou)
+            if tel_barbearia:
+                msg_barb = whatsapp_service.gerar_mensagem_alteracao_agendamento(
+                    cliente_nome=cliente_nome,
+                    data_antiga=data_antiga,
+                    hora_antiga=hora_antiga,
+                    data_nova=data_nova_str,
+                    hora_nova=hora_nova_str,
+                    servicos_nomes=servicos_nomes_novos,
+                )
+                await whatsapp_service.enviar_mensagem_automatica(tel_barbearia, msg_barb)
+
+            # 2. Enviar para o CLIENTE (confirmando a alteração dele)
+            if cliente_telefone:
+                primeiro_nome = cliente_nome.split()[0]
+                servicos_str = ", ".join(servicos_nomes_novos)
+                msg_cliente = (
+                    f"🔄 *SEU AGENDAMENTO FOI ALTERADO!* 🔄\n\n"
+                    f"Olá, *{primeiro_nome}*! Seu horário foi atualizado com sucesso.\n\n"
+                    f"✂️ *Serviços:* {servicos_str}\n"
+                    f"📅 *Nova Data:* {data_nova_str}\n"
+                    f"⏰ *Novo Horário:* {hora_nova_str}\n"
+                    f"💇 *Barbeiro:* {barbeiro_nome}\n\n"
+                    f"Chegue com 5 minutos de antecedência. Qualquer imprevisto, nos avise!\n"
+                    f"Te esperamos! 💈✨"
+                )
+                await whatsapp_service.enviar_mensagem_automatica(cliente_telefone, msg_cliente)
+
+    except Exception as e:
+        print(f"⚠️ Erro ao enviar notificação de alteração: {e}")
 
 
 @router.get("/cliente/sair")
