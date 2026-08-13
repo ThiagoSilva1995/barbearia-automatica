@@ -475,7 +475,12 @@ async def cliente_editar_agendamento_action(
             if dia_semana == 5:  # Sábado
                 limite_horario = time(12, 0)
             else:
-                limite_horario = config.horario_fim_tarde or time(18, 30)
+                # ✅ CORREÇÃO: Converter string para time antes de usar em combine()
+                limite_horario_str = config.horario_fim_tarde or "18:30"
+                try:
+                    limite_horario = datetime.strptime(limite_horario_str, "%H:%M").time()
+                except (ValueError, TypeError):
+                    limite_horario = time(18, 30)
 
             # Calcular horário de término
             dt_inicio = datetime.combine(nova_data, nova_hora)
