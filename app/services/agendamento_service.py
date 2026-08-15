@@ -90,58 +90,72 @@ async def verificar_disponibilidade(
 # app/services/agendamento_service.py
 
 
-async def criar_agendamento(db: AsyncSession, dados: AgendamentoCreate) -> Agendamento:
-    """Cria um novo agendamento após verificar disponibilidade e regras de negócio."""
+async def criar_agendamento(
+    db: AsyncSession,
+    dados: AgendamentoCreate,
+    ignorar_regras_horario: bool = False,
+) -> Agendamento:
+    """
+    Cria um novo agendamento após verificar disponibilidade e regras de negócio.
+    
+    Args:
+        ignorar_regras_horario: Se True, pula validações de horário de funcionamento
+                                e domingo (usado pelo admin para agendar fora do expediente).
+                                A validação de conflito de horário (mesmo barbeiro/mesma hora)
+                                permanece SEMPRE ativa.
+    """
 
     # 1. Calcular duração total
     duracao_total = await _get_duracao_total(db, dados.servico_ids)
 
-    # 2. Verificar disponibilidade (Conflito de Horário)
+    # 2. Verificar disponibilidade (Conflito de Horário) — SEMPRE ATIVO
     # A função verificar_disponibilidade já deve lidar com objetos time corretamente
     if await verificar_disponibilidade(
         db, dados.barbeiro_id, dados.data, dados.hora, duracao_total
     ):
         raise ValueError("Horário indisponível para a duração selecionada.")
 
-    # 3. ✅ CORREÇÃO CRÍTICA: Validação de Horário de Funcionamento (Ex: Sábado às 12h)
-    from app.models.configuracao import Configuracao
+    # 3. ✅ Validação de Horário de Funcionamento (Ex: Sábado às 12h)
+    # Se ignorar_regras_horario=True (admin), pula essa validação
+    if not ignorar_regras_horario:
+        from app.models.configuracao import Configuracao
 
-    stmt_config = select(Configuracao).limit(1)
-    res_config = await db.execute(stmt_config)
-    config = res_config.scalars().first()
+        stmt_config = select(Configuracao).limit(1)
+        res_config = await db.execute(stmt_config)
+        config = res_config.scalars().first()
 
-    if config:
-        dia_semana = dados.data.weekday()
+        if config:
+            dia_semana = dados.data.weekday()
 
-        # Definir limite do dia
-        if dia_semana == 6:  # Domingo
-            raise ValueError("A barbearia não funciona aos domingos.")
+            # Definir limite do dia
+            if dia_semana == 6:  # Domingo
+                raise ValueError("A barbearia não funciona aos domingos.")
 
-        if dia_semana == 5:  # Sábado
-            limite_horario = time(12, 0)
-        else:
-            # Dias de semana: usa o fim da tarde configurado
-            limite_horario_str = config.horario_fim_tarde or "18:30"
-            # Garante conversão segura
-            try:
-                limite_horario = datetime.strptime(limite_horario_str, "%H:%M").time()
-            except:
-                limite_horario = time(18, 30)
+            if dia_semana == 5:  # Sábado
+                limite_horario = time(12, 0)
+            else:
+                # Dias de semana: usa o fim da tarde configurado
+                limite_horario_str = config.horario_fim_tarde or "18:30"
+                # Garante conversão segura
+                try:
+                    limite_horario = datetime.strptime(limite_horario_str, "%H:%M").time()
+                except:
+                    limite_horario = time(18, 30)
 
-        # Calcular horário de término do agendamento
-        # dados.hora JÁ É UM OBJETO TIME vindo do schema
-        dt_inicio = datetime.combine(dados.data, dados.hora)
-        dt_fim = dt_inicio + timedelta(minutes=duracao_total)
+            # Calcular horário de término do agendamento
+            # dados.hora JÁ É UM OBJETO TIME vindo do schema
+            dt_inicio = datetime.combine(dados.data, dados.hora)
+            dt_fim = dt_inicio + timedelta(minutes=duracao_total)
 
-        # Tolerância de 5 minutos
-        limite_com_tolerancia_dt = datetime.combine(dados.data, limite_horario) + timedelta(
-            minutes=5
-        )
-
-        if dt_fim > limite_com_tolerancia_dt:
-            raise ValueError(
-                f"Este serviço ultrapassa o horário de funcionamento ({limite_horario.strftime('%H:%M')}). Escolha um horário mais cedo."
+            # Tolerância de 5 minutos
+            limite_com_tolerancia_dt = datetime.combine(dados.data, limite_horario) + timedelta(
+                minutes=5
             )
+
+            if dt_fim > limite_com_tolerancia_dt:
+                raise ValueError(
+                    f"Este serviço ultrapassa o horário de funcionamento ({limite_horario.strftime('%H:%M')}). Escolha um horário mais cedo."
+                )
 
     # 4. Criar objeto base
     novo_agd = Agendamento(

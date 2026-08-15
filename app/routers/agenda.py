@@ -183,7 +183,9 @@ async def marcar_horario_action(request: Request, db: AsyncSession = Depends(get
             hora=datetime.strptime(hora_str, "%H:%M").time(),
             servico_ids=servico_ids,
         )
-        novo_agd = await criar_agendamento(db, dados)
+        # ✅ Admin: ignora regras de horário de funcionamento e domingo
+        # (Mas mantém validação de conflito com outros agendamentos do mesmo barbeiro)
+        novo_agd = await criar_agendamento(db, dados, ignorar_regras_horario=True)
         
         # 🔔 Criar notificação in-app para o admin
         try:
@@ -493,48 +495,19 @@ async def editar_agendamento_form(
             status_code=status.HTTP_303_SEE_OTHER,
         )
 
-    stmt_config = select(Configuracao).limit(1)
-    res_config = await db.execute(stmt_config)
-    config = res_config.scalars().first()
-
-    # ✅ Usa função inteligente
-    # Calcula duração atual do agendamento
+    # ✅ ADMIN: pode editar para QUALQUER dia e horário (00:00 às 23:00)
+    # Gera todos os slots do dia, validando APENAS conflitos com outros agendamentos
+    # do mesmo barbeiro (não aplica regras de fechamento nem bloqueia domingos)
     duracao_atual = agd.duracao_minutos or 30
 
-    # 1. Gera slots
-    slots_gerados = await gerar_slots_disponiveis(db, config, agd.data, passo_minutos=10)
-
-    # 2. Busca ocupados (excluindo o próprio)
-    stmt_ocupados = select(Agendamento.hora, Agendamento.duracao_minutos).where(
-        Agendamento.data == agd.data,
-        Agendamento.barbeiro_id == agd.barbeiro_id,
-        Agendamento.id != agendamento_id,
-    )
-    ocupados_res = await db.execute(stmt_ocupados)
-    ocupados = ocupados_res.all()
-
-    # 3. Filtra
-    # ✅ CORREÇÃO: Passa os horários de ambos os períodos (manhã e tarde) para validar corretamente
-    horario_fim_manha_admin = None
-    horario_inicio_tarde_admin = None
-    horario_fim_tarde_admin = None
-    
-    if config:
-        try:
-            if config.horario_fim_manha:
-                horario_fim_manha_admin = datetime.strptime(config.horario_fim_manha, "%H:%M").time()
-            if config.horario_inicio_tarde:
-                horario_inicio_tarde_admin = datetime.strptime(config.horario_inicio_tarde, "%H:%M").time()
-            if config.horario_fim_tarde:
-                horario_fim_tarde_admin = datetime.strptime(config.horario_fim_tarde, "%H:%M").time()
-        except (ValueError, TypeError):
-            pass
-    
-    horarios_livres = filtrar_conflitos(
-        slots_gerados, ocupados, duracao_necessaria=duracao_atual, buffer=10,
-        horario_fim_manha=horario_fim_manha_admin,
-        horario_inicio_tarde=horario_inicio_tarde_admin,
-        horario_fim_tarde=horario_fim_tarde_admin,
+    horarios_livres = await gerar_slots_admin(
+        db,
+        agd.data,
+        passo_minutos=10,
+        duracao_necessaria=duracao_atual,
+        buffer=10,
+        barbeiro_id=agd.barbeiro_id,
+        exclude_id=agendamento_id,
     )
 
     clientes_res = await db.execute(select(Cliente).order_by(Cliente.nome))
@@ -571,9 +544,8 @@ async def editar_agendamento_action(
 
         nova_data = datetime.strptime(form_data["data"], "%Y-%m-%d").date()
 
-        # Validação Domingo
-        if nova_data.weekday() == 6:
-            raise ValueError("A barbearia não funciona aos domingos.")
+        # ✅ ADMIN: pode editar para QUALQUER dia (incluindo domingos e após expediente)
+        # A validação de conflito de horário com outros agendamentos permanece ativa
 
         agd.cliente_id = int(form_data["cliente"])
         agd.barbeiro_id = int(form_data["barbeiro"])

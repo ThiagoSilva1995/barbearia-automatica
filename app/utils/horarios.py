@@ -2,7 +2,7 @@
 from datetime import datetime, time, date, timedelta
 import pytz
 from sqlalchemy import select
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 from app.models.bloqueio import BloqueioHorario
 from app.models import Agendamento
@@ -191,29 +191,71 @@ def filtrar_conflitos(
     agendamentos_ocupados: List[Tuple[time, int]],
     duracao_necessaria: int,
     buffer: int = 10,
-    horario_fechamento: time = None,
+    horario_fim_manha: time = None,
+    horario_inicio_tarde: time = None,
+    horario_fim_tarde: time = None,
+    horario_fechamento: time = None,  # Depreciado, mantido para compatibilidade
 ) -> List[str]:
     """
     Filtra slots que colidem com agendamentos existentes.
     
-    ✅ CORREÇÃO: Agora verifica se o slot + duração ultrapassa o horário de fechamento.
+    ✅ CORREÇÃO CRÍTICA: Valida se o agendamento ultrapassa o horário de fechamento
+    considerando os DOIS períodos (manhã e tarde) separadamente.
+    
+    Ex: Se manhã fecha às 12:00 e serviço dura 55min, o último slot da manhã
+    será 11:05 (11:05 + 55 = 12:00). Slots como 11:50 + 55min = 12:45 são bloqueados
+    pois ultrapassam o fechamento da manhã (12:00).
     """
     horarios_livres = []
     tempo_total = duracao_necessaria + buffer
     
-    # Converter horário de fechamento para minutos (se fornecido)
-    min_fechamento = None
-    if horario_fechamento:
-        min_fechamento = _calcular_minutos(horario_fechamento)
+    # Converter horários de fechamento para minutos
+    min_fim_manha = None
+    if horario_fim_manha:
+        min_fim_manha = _calcular_minutos(horario_fim_manha)
+    
+    min_inicio_tarde = None
+    if horario_inicio_tarde:
+        min_inicio_tarde = _calcular_minutos(horario_inicio_tarde)
+    
+    min_fim_tarde = None
+    if horario_fim_tarde:
+        min_fim_tarde = _calcular_minutos(horario_fim_tarde)
 
     for h_str in slots_gerados:
         h_time = datetime.strptime(h_str, "%H:%M").time()
         min_inicio_novo = _calcular_minutos(h_time)
-        min_fim_novo = min_inicio_novo + tempo_total
+        
+        # ✅ CORREÇÃO CRÍTICA: Separa duração do serviço do tempo total (com buffer)
+        # - Para validar contra FECHAMENTO: usa APENAS duração do serviço (sem buffer)
+        # - Para validar contra OUTROS AGENDAMENTOS: usa duração + buffer
+        min_fim_servico = min_inicio_novo + duracao_necessaria  # Sem buffer (para fechamento)
+        min_fim_com_buffer = min_inicio_novo + tempo_total     # Com buffer (para conflitos)
+
+        # ✅ VALIDAÇÃO INTELIGENTE: Determinar em qual período o slot está
+        # e usar o fechamento correto de cada período
+        min_fechamento = None
+        
+        # Se houver parâmetro antigo (compatibilidade), usa ele
+        if horario_fechamento is not None:
+            min_fechamento = _calcular_minutos(horario_fechamento)
+        else:
+            # Nova lógica: validar baseado no período do slot
+            if min_inicio_tarde is not None:
+                # Tem tarde configurada - verificar se slot é manhã ou tarde
+                if min_inicio_novo < min_inicio_tarde:
+                    # Slot é da MANHÃ → usar fechamento da manhã
+                    min_fechamento = min_fim_manha
+                else:
+                    # Slot é da TARDE → usar fechamento da tarde
+                    min_fechamento = min_fim_tarde
+            else:
+                # Só tem manhã (ex: sábado) → usar fechamento da manhã
+                min_fechamento = min_fim_manha
 
         # ✅ VALIDAÇÃO: Verificar se ultrapassa o horário de fechamento
-        # Usa >= em vez de > para garantir que o serviço termine ANTES ou EXATAMENTE no fechamento
-        if min_fechamento is not None and min_fim_novo > min_fechamento:
+        # IMPORTANTE: Usa min_fim_servico (SEM buffer) pois o buffer não se aplica ao fechamento
+        if min_fechamento is not None and min_fim_servico > min_fechamento:
             continue  # Pula este slot pois ultrapassa o fechamento
 
         esta_livre = True
@@ -223,7 +265,8 @@ def filtrar_conflitos(
             min_inicio_occ = _calcular_minutos(occ_hora)
             min_fim_occ = min_inicio_occ + dur_real + buffer
 
-            if _verificar_sobreposição(min_inicio_novo, min_fim_novo, min_inicio_occ, min_fim_occ):
+            # ✅ Usa min_fim_com_buffer (com buffer) para verificar conflitos com outros agendamentos
+            if _verificar_sobreposição(min_inicio_novo, min_fim_com_buffer, min_inicio_occ, min_fim_occ):
                 esta_livre = False
                 break
 
@@ -233,32 +276,56 @@ def filtrar_conflitos(
     return horarios_livres
 
 
-async def gerar_slots_admin(db, data_alvo: date, passo_minutos: int = 60) -> List[str]:
+async def gerar_slots_admin(
+    db,
+    data_alvo: date,
+    passo_minutos: int = 10,
+    duracao_necessaria: int = 30,
+    buffer: int = 10,
+    barbeiro_id: Optional[int] = None,
+    exclude_id: Optional[int] = None,
+) -> List[str]:
     """
     Gera horários para ADMIN sem restrição de horário de funcionamento.
-    Gera slots das 00:00 às 23:00, removendo apenas os que colidem com agendamentos existentes.
+    Gera slots das 00:00 às 23:00 com passo configurável, validando apenas
+    conflitos com agendamentos existentes (não aplica regras de fechamento).
+    
+    Args:
+        passo_minutos: Intervalo entre slots (padrão 10min)
+        duracao_necessaria: Duração do serviço em minutos (para validar conflitos)
+        buffer: Minutos de buffer entre agendamentos (limpeza)
+        barbeiro_id: Se fornecido, filtra conflitos apenas desse barbeiro
+        exclude_id: ID de agendamento a ser ignorado no cálculo de conflitos (útil em edições)
     """
     # 1. Gerar todos os slots possíveis do dia (de 00:00 a 23:00)
     slots_gerados = []
     inicio_dia = datetime.combine(data_alvo, time(0, 0))
+    fim_dia = datetime.combine(data_alvo, time(23, 0))
 
-    for i in range(24):
-        hora_atual = inicio_dia + timedelta(hours=i)
-        slots_gerados.append(hora_atual.strftime("%H:%M"))
+    atual = inicio_dia
+    while atual <= fim_dia:
+        slots_gerados.append(atual.strftime("%H:%M"))
+        atual += timedelta(minutes=passo_minutos)
 
     # 2. Buscar agendamentos ocupados do dia
     stmt_ocupados = select(Agendamento.hora, Agendamento.duracao_minutos).where(
         Agendamento.data == data_alvo
     )
+    if barbeiro_id is not None:
+        stmt_ocupados = stmt_ocupados.where(Agendamento.barbeiro_id == barbeiro_id)
+    if exclude_id is not None:
+        stmt_ocupados = stmt_ocupados.where(Agendamento.id != exclude_id)
+
     ocupados_res = await db.execute(stmt_ocupados)
     ocupados = ocupados_res.all()
 
-    # 3. Filtrar conflitos (Buffer 0 para máxima liberdade do admin)
+    # 3. Filtrar conflitos — SEM passar horários de fechamento,
+    #    de forma que filtrar_conflitos valide APENAS sobreposição com outros agendamentos
     horarios_livres = filtrar_conflitos(
         slots_gerados,
         ocupados,
-        duracao_necessaria=30,
-        buffer=0,
+        duracao_necessaria=duracao_necessaria,
+        buffer=buffer,
     )
 
     return horarios_livres
