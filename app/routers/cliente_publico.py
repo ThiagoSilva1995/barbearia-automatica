@@ -17,7 +17,7 @@ from app.services.agendamento_service import (
     verificar_disponibilidade,
 )
 from app.services.auditoria_service import registrar_auditoria
-from app.utils.horarios import gerar_slots_disponiveis, filtrar_conflitos
+from app.utils.horarios import gerar_slots_disponiveis, filtrar_conflitos, validar_horario_funcionamento
 from app.utils.phone_utils import normalize_phone_for_search
 from app.services import whatsapp_service
 from app.services.notificacao_service import NotificacaoService
@@ -458,6 +458,7 @@ async def cliente_editar_agendamento_action(
 
         # ✅ 2. Verificar Disponibilidade (Conflito com outros clientes)
         # Usamos a função verificar_disponibilidade que já checa sobreposição baseada na duração
+        # ✅ CORREÇÃO: Passa buffer=10 para validar conflitos com margem de limpeza
         ocupado = await verificar_disponibilidade(
             db,
             novo_barbeiro_id,
@@ -465,6 +466,7 @@ async def cliente_editar_agendamento_action(
             nova_hora,
             duracao_minutos=nova_duracao,
             exclude_id=agendamento_id,  # Exclui o próprio agendamento da verificação
+            buffer=10,  # ✅ Buffer de 10min entre agendamentos
         )
 
         if ocupado:
@@ -481,35 +483,14 @@ async def cliente_editar_agendamento_action(
         config = res_config.scalars().first()
 
         if config:
-            dia_semana = nova_data.weekday()
-
-            if dia_semana == 6:  # Domingo
-                raise ValueError("A barbearia não funciona aos domingos.")
-
-            if dia_semana == 5:  # Sábado
-                limite_horario = time(12, 0)
-            else:
-                # ✅ CORREÇÃO: Converter string para time antes de usar em combine()
-                limite_horario_str = config.horario_fim_tarde or "18:30"
-                try:
-                    limite_horario = datetime.strptime(limite_horario_str, "%H:%M").time()
-                except (ValueError, TypeError):
-                    limite_horario = time(18, 30)
-
-            # Calcular horário de término
-            dt_inicio = datetime.combine(nova_data, nova_hora)
-            dt_fim = dt_inicio + timedelta(minutes=nova_duracao)
-
-            # Tolerância de 5 minutos
-            limite_com_tolerancia = (
-                datetime.combine(nova_data, limite_horario) + timedelta(minutes=5)
-            ).time()
-
-            if dt_fim.time() > limite_com_tolerancia:
-                return RedirectResponse(
-                    url=f"/cliente/editar/{agendamento_id}?erro=Este+serviço+ultrapassa+o+horário+de+funcionamento+({limite_horario.strftime('%H:%M')}).",
-                    status_code=303,
-                )
+            # ✅ Usa a função utilitária que valida corretamente os dois períodos (manhã/tarde)
+            await validar_horario_funcionamento(
+                data=nova_data,
+                hora_inicio=nova_hora,
+                duracao_minutos=nova_duracao,
+                config=config,
+                tolerancia_minutos=5,
+            )
 
         # --- Se passou pelas validações, atualiza o banco ---
 

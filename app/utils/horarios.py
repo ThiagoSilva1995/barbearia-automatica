@@ -276,6 +276,81 @@ def filtrar_conflitos(
     return horarios_livres
 
 
+async def validar_horario_funcionamento(
+    data: date,
+    hora_inicio: time,
+    duracao_minutos: int,
+    config,
+    tolerancia_minutos: int = 5,
+) -> None:
+    """
+    Valida se um agendamento cabe no horário de funcionamento da barbearia.
+    Considera os DOIS períodos (manhã e tarde) separadamente.
+    
+    Args:
+        data: Data do agendamento
+        hora_inicio: Hora de início (objeto time)
+        duracao_minutos: Duração do serviço em minutos
+        config: Objeto Configuracao com os horários
+        tolerancia_minutos: Minutos de tolerância após o fechamento (padrão 5)
+    
+    Raises:
+        ValueError: Se o agendamento ultrapassar o horário de funcionamento
+    """
+    dia_semana = data.weekday()
+    
+    # Domingo: sempre bloqueado
+    if dia_semana == 6:
+        raise ValueError("A barbearia não funciona aos domingos.")
+    
+    # Sábado: fecha às 12:00 (padrão)
+    if dia_semana == 5:
+        limite_horario = time(12, 0)
+        periodo_nome = "sábado (12:00)"
+    else:
+        # Dias de semana: extrair horários da config
+        horario_fim_manha = None
+        horario_inicio_tarde = None
+        horario_fim_tarde = None
+        
+        try:
+            if config and config.horario_fim_manha:
+                horario_fim_manha = datetime.strptime(config.horario_fim_manha, "%H:%M").time()
+            if config and config.horario_inicio_tarde:
+                horario_inicio_tarde = datetime.strptime(config.horario_inicio_tarde, "%H:%M").time()
+            if config and config.horario_fim_tarde:
+                horario_fim_tarde = datetime.strptime(config.horario_fim_tarde, "%H:%M").time()
+        except (ValueError, TypeError):
+            pass
+        
+        # Determinar em qual período o slot está
+        min_inicio = _calcular_minutos(hora_inicio)
+        min_inicio_tarde = _calcular_minutos(horario_inicio_tarde) if horario_inicio_tarde else None
+        
+        if min_inicio_tarde is not None and min_inicio < min_inicio_tarde:
+            # Slot é da MANHÃ → usar fechamento da manhã
+            limite_horario = horario_fim_manha or time(12, 0)
+            periodo_nome = f"da manhã ({limite_horario.strftime('%H:%M')})"
+        else:
+            # Slot é da TARDE → usar fechamento da tarde
+            limite_horario = horario_fim_tarde or time(18, 30)
+            periodo_nome = f"da tarde ({limite_horario.strftime('%H:%M')})"
+    
+    # Calcular horário de término do agendamento
+    dt_inicio = datetime.combine(data, hora_inicio)
+    dt_fim = dt_inicio + timedelta(minutes=duracao_minutos)
+    
+    # Aplicar tolerância
+    limite_com_tolerancia_dt = datetime.combine(data, limite_horario) + timedelta(
+        minutes=tolerancia_minutos
+    )
+    
+    if dt_fim > limite_com_tolerancia_dt:
+        raise ValueError(
+            f"Este serviço de {duracao_minutos} minutos ultrapassa o horário {periodo_nome}. Escolha um horário mais cedo."
+        )
+
+
 async def gerar_slots_admin(
     db,
     data_alvo: date,

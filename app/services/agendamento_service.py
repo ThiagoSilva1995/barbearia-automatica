@@ -42,10 +42,15 @@ async def _checar_conflito(
     inicio_min: int,
     fim_min: int,
     exclude_id: Optional[int] = None,
+    buffer: int = 0,
 ) -> bool:
     """
     Verifica conflito usando matemática simples de minutos.
     Retorna True se houver conflito.
+    
+    Args:
+        buffer: Minutos de buffer entre agendamentos (limpeza). 
+                Se > 0, estende o fim do agendamento existente para validar sobreposição.
     """
     # Busca apenas os horários e durações dos agendamentos existentes para esse barbeiro/data
     stmt = select(Agendamento.hora, Agendamento.duracao_minutos).where(
@@ -59,7 +64,7 @@ async def _checar_conflito(
 
     for occ_hora, occ_duracao in ocupados:
         occ_inicio = _time_to_minutes(occ_hora)
-        occ_fim = occ_inicio + (occ_duracao or 30)
+        occ_fim = occ_inicio + (occ_duracao or 30) + buffer  # ✅ Adiciona buffer no fim do existente
 
         # Lógica de sobreposição: (InicioA < FimB) e (FimA > InicioB)
         if inicio_min < occ_fim and fim_min > occ_inicio:
@@ -80,11 +85,12 @@ async def verificar_disponibilidade(
     hora_inicio: time,
     duracao_minutos: int = 30,
     exclude_id: Optional[int] = None,
+    buffer: int = 0,
 ) -> bool:
     """Verifica se um horário está disponível (True = Ocupado/Conflito)."""
     inicio_min = _time_to_minutes(hora_inicio)
     fim_min = inicio_min + duracao_minutos
-    return await _checar_conflito(db, barbeiro_id, data, inicio_min, fim_min, exclude_id)
+    return await _checar_conflito(db, barbeiro_id, data, inicio_min, fim_min, exclude_id, buffer=buffer)
 
 
 # app/services/agendamento_service.py
@@ -125,37 +131,16 @@ async def criar_agendamento(
         config = res_config.scalars().first()
 
         if config:
-            dia_semana = dados.data.weekday()
-
-            # Definir limite do dia
-            if dia_semana == 6:  # Domingo
-                raise ValueError("A barbearia não funciona aos domingos.")
-
-            if dia_semana == 5:  # Sábado
-                limite_horario = time(12, 0)
-            else:
-                # Dias de semana: usa o fim da tarde configurado
-                limite_horario_str = config.horario_fim_tarde or "18:30"
-                # Garante conversão segura
-                try:
-                    limite_horario = datetime.strptime(limite_horario_str, "%H:%M").time()
-                except:
-                    limite_horario = time(18, 30)
-
-            # Calcular horário de término do agendamento
-            # dados.hora JÁ É UM OBJETO TIME vindo do schema
-            dt_inicio = datetime.combine(dados.data, dados.hora)
-            dt_fim = dt_inicio + timedelta(minutes=duracao_total)
-
-            # Tolerância de 5 minutos
-            limite_com_tolerancia_dt = datetime.combine(dados.data, limite_horario) + timedelta(
-                minutes=5
+            # ✅ Usa a função utilitária que valida corretamente os dois períodos (manhã/tarde)
+            from app.utils.horarios import validar_horario_funcionamento
+            
+            await validar_horario_funcionamento(
+                data=dados.data,
+                hora_inicio=dados.hora,
+                duracao_minutos=duracao_total,
+                config=config,
+                tolerancia_minutos=5,
             )
-
-            if dt_fim > limite_com_tolerancia_dt:
-                raise ValueError(
-                    f"Este serviço ultrapassa o horário de funcionamento ({limite_horario.strftime('%H:%M')}). Escolha um horário mais cedo."
-                )
 
     # 4. Criar objeto base
     novo_agd = Agendamento(
